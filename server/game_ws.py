@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import time
 from typing import Callable, Optional
 
 from fastapi import WebSocket, WebSocketDisconnect
@@ -10,8 +12,10 @@ from poker.game import ActionType, Game, IllegalActionError, Stage
 from server.db import db
 from server.rooms import (
     BIG_BLIND,
+    DISCONNECT_GRACE_SECONDS,
     STARTING_STACK,
     SMALL_BLIND,
+    TURN_TIMEOUT_SECONDS,
     Room,
     RoomManager,
     RoomNotFoundError,
@@ -115,6 +119,8 @@ def build_state(room: Room, viewer_id: str, connected: set[str]) -> dict:
         "current_actor": game.current_actor,
         "players": [_player_view(room, p.player_id, viewer_id, connected) for p in room.players],
     }
+    if room.turn_deadline is not None:
+        state["turn_expires_in"] = max(0.0, room.turn_deadline - time.time())
     if game.stage == Stage.SHOWDOWN and room.last_payouts is not None:
         state["payouts"] = room.last_payouts
     state["game_over"] = room.game_over
@@ -145,6 +151,58 @@ def _maybe_settle(room: Room) -> None:
     names = {p.player_id: p.name for p in room.players}
     for player_id, stack in stacks_after.items():
         db.update_chip_balance(player_id, names[player_id], stack)
+
+
+def _cancel_turn_timer(room: Room) -> None:
+    task = room.turn_timer_task
+    if task is not None and task is not asyncio.current_task():
+        task.cancel()
+    room.turn_timer_task = None
+    room.turn_deadline = None
+
+
+def _arm_turn_timer(room: Room) -> None:
+    """(Re)start the clock for whoever is currently on the move, using a
+    short grace period instead of the full timeout if they're disconnected.
+    Must be called while holding room.lock."""
+    _cancel_turn_timer(room)
+    game = room.game
+    if game is None or game.stage is None or game.stage == Stage.SHOWDOWN:
+        return
+    actor_id = game.current_actor
+    if actor_id is None:
+        return
+    connected = connection_manager.connected_ids(room.code)
+    timeout = TURN_TIMEOUT_SECONDS if actor_id in connected else DISCONNECT_GRACE_SECONDS
+    room.turn_deadline = time.time() + timeout
+    room.turn_timer_task = asyncio.create_task(_run_turn_timer(room, actor_id, timeout))
+
+
+def _apply_timeout_action(room: Room, actor_id: str) -> None:
+    game = room.game
+    assert game is not None
+    player = next(p for p in game.players if p.player_id == actor_id)
+    connected = connection_manager.connected_ids(room.code)
+    if actor_id not in connected:
+        game.apply_action(actor_id, ActionType.FOLD)
+        return
+    to_call = game.current_bet - player.current_bet
+    action = ActionType.CHECK if to_call <= 0 else ActionType.FOLD
+    game.apply_action(actor_id, action)
+
+
+async def _run_turn_timer(room: Room, actor_id: str, timeout: float) -> None:
+    await asyncio.sleep(timeout)
+    async with room.lock:
+        game = room.game
+        if game is None or game.stage is None or game.stage == Stage.SHOWDOWN:
+            return
+        if game.current_actor != actor_id:
+            return  # stale: a real action already advanced the turn
+        _apply_timeout_action(room, actor_id)
+        _maybe_settle(room)
+        _arm_turn_timer(room)
+    await _broadcast_state(room)
 
 
 def _apply_next_hand(room: Room, player_id: str) -> Optional[str]:
@@ -221,7 +279,10 @@ async def handle_connection(websocket: WebSocket, code: str, room_manager: RoomM
 
     try:
         async with room.lock:
+            was_new_hand = room.game is None
             _maybe_start_hand(room)
+            if room.game is not None and (was_new_hand or room.game.current_actor == player_id):
+                _arm_turn_timer(room)
         await _broadcast_state(room)
 
         while True:
@@ -241,6 +302,7 @@ async def handle_connection(websocket: WebSocket, code: str, room_manager: RoomM
                 error = _apply_message(room, player_id, raw)
                 if error is None:
                     _maybe_settle(room)
+                    _arm_turn_timer(room)
 
             if error is not None:
                 await websocket.send_json({"type": "error", "message": error})
@@ -248,4 +310,9 @@ async def handle_connection(websocket: WebSocket, code: str, room_manager: RoomM
                 await _broadcast_state(room)
     finally:
         connection_manager.disconnect(code, player_id, websocket)
+        async with room.lock:
+            if not connection_manager.connected_ids(room.code):
+                _cancel_turn_timer(room)
+            elif room.game is not None and room.game.current_actor == player_id:
+                _arm_turn_timer(room)
         await _broadcast_state(room)

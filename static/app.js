@@ -49,10 +49,19 @@ el.nextHandBtn.textContent = "Next Hand";
 el.nextHandBtn.hidden = true;
 el.showdown.appendChild(el.nextHandBtn);
 
+// Countdown for the current actor's turn; created here so index.html/style.css
+// don't need to change.
+el.turnTimer = document.createElement("div");
+el.turnTimer.id = "turn-timer";
+el.turnTimer.hidden = true;
+el.stageLabel.insertAdjacentElement("afterend", el.turnTimer);
+
 let ws = null;
 let myPlayerId = null;
 let myName = null;
 let roomCode = null;
+let turnDeadlineMs = null;
+let turnTimerInterval = null;
 
 function escapeHtml(value) {
   const div = document.createElement("div");
@@ -89,6 +98,30 @@ function showLobbyMessage(text) {
 
 function showGameError(text) {
   el.gameError.textContent = text ?? "";
+}
+
+function stopTurnTimer() {
+  if (turnTimerInterval !== null) {
+    clearInterval(turnTimerInterval);
+    turnTimerInterval = null;
+  }
+  turnDeadlineMs = null;
+  el.turnTimer.hidden = true;
+}
+
+function updateTurnTimerDisplay() {
+  if (turnDeadlineMs === null) return;
+  const remaining = Math.max(0, Math.ceil((turnDeadlineMs - Date.now()) / 1000));
+  el.turnTimer.textContent = `Time left: ${remaining}s`;
+}
+
+function startTurnTimer(secondsRemaining) {
+  turnDeadlineMs = Date.now() + secondsRemaining * 1000;
+  el.turnTimer.hidden = false;
+  updateTurnTimerDisplay();
+  if (turnTimerInterval === null) {
+    turnTimerInterval = setInterval(updateTurnTimerDisplay, 250);
+  }
 }
 
 function saveSession() {
@@ -171,6 +204,7 @@ function leaveTable() {
   el.lobby.hidden = false;
   el.nextHandBtn.hidden = true;
   el.gameOverBanner.hidden = true;
+  stopTurnTimer();
   setStatus("");
   showGameError("");
 }
@@ -189,6 +223,7 @@ function renderState(state) {
     el.showdown.hidden = true;
     el.nextHandBtn.hidden = true;
     el.gameOverBanner.hidden = true;
+    stopTurnTimer();
     renderSeats(state, null);
     disableAllActions();
     return;
@@ -197,6 +232,12 @@ function renderState(state) {
   el.stageLabel.textContent = state.stage;
   el.potAmount.textContent = String(state.pot);
   renderCards(el.communityCards, state.community_cards);
+
+  if (typeof state.turn_expires_in === "number") {
+    startTurnTimer(state.turn_expires_in);
+  } else {
+    stopTurnTimer();
+  }
 
   const me = state.players.find((p) => p.player_id === myPlayerId);
   renderCards(el.holeCards, me ? me.hole_cards : []);

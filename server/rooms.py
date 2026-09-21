@@ -17,6 +17,9 @@ STARTING_STACK = 1000
 SMALL_BLIND = 5
 BIG_BLIND = 10
 
+TURN_TIMEOUT_SECONDS = 30
+DISCONNECT_GRACE_SECONDS = 10
+
 
 class RoomError(ValueError):
     pass
@@ -46,6 +49,8 @@ class Room:
     winner_id: Optional[str] = None
     eliminated_ids: set[str] = field(default_factory=set)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    turn_deadline: Optional[float] = None
+    turn_timer_task: Optional[asyncio.Task] = None
 
 
 class RoomManager:
