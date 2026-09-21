@@ -12,7 +12,9 @@
       "Bash(\"/c/Users/sreek/OneDrive/文档/DSA/POKER APP/.venv/Scripts/python.exe\" -c \"import pydantic, fastapi; print\\(pydantic.VERSION, fastapi.__version__\\)\")",
       "Bash(./.venv/Scripts/python.exe -c 'import ast,sys *)",
       "Bash(./.venv/Scripts/python.exe -m pyflakes server/game_ws.py server/main.py server/rooms.py)",
-      "Bash(./.venv/Scripts/python.exe -c ' *)"
+      "Bash(./.venv/Scripts/python.exe -c ' *)",
+      "Bash(\".venv/Scripts/python.exe\" -m pytest -q)",
+      "Bash(.venv/Scripts/python.exe -c ' *)"
     ]
   }
 }

@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Poker App</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header>
+    <h1>Poker App</h1>
+    <span id="connection-status" class="status"></span>
+  </header>
+
+  <main>
+    <section id="lobby">
+      <div class="panel">
+        <h2>Create a room</h2>
+        <button id="create-room-btn">Create Room</button>
+      </div>
+      <div class="panel">
+        <h2>Join a room</h2>
+        <form id="join-form">
+          <input id="join-code" placeholder="Room code" maxlength="6" autocomplete="off" required>
+          <input id="join-name" placeholder="Your name" maxlength="32" autocomplete="off" required>
+          <button type="submit">Join</button>
+        </form>
+      </div>
+      <p id="lobby-message"></p>
+    </section>
+
+    <section id="table" hidden>
+      <div class="room-bar">
+        <span>Room: <strong id="room-code-display"></strong></span>
+        <button id="leave-btn">Leave</button>
+      </div>
+
+      <p id="waiting-banner" hidden>Waiting for another player to join&hellip;</p>
+
+      <div class="poker-table">
+        <div class="community">
+          <div id="stage-label" class="stage"></div>
+          <div id="community-cards" class="cards"></div>
+          <div class="pot">Pot: <span id="pot-amount">0</span></div>
+        </div>
+        <div id="seats" class="seats"></div>
+      </div>
+
+      <div id="showdown" class="showdown" hidden>
+        <h3>Showdown</h3>
+        <ul id="payouts-list"></ul>
+      </div>
+
+      <div class="your-hand">
+        <h3>Your Hand</h3>
+        <div id="hole-cards" class="cards"></div>
+      </div>
+
+      <div class="actions">
+        <button id="fold-btn" data-action="fold">Fold</button>
+        <button id="check-btn" data-action="check">Check</button>
+        <button id="call-btn" data-action="call">Call</button>
+        <input id="raise-amount" type="number" min="0" step="1" aria-label="Raise to amount">
+        <button id="raise-btn" data-action="raise">Raise to</button>
+        <button id="max-raise-btn" type="button">Max</button>
+      </div>
+      <p id="game-error" class="error"></p>
+    </section>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>

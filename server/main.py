@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import FastAPI, HTTPException, WebSocket
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from server.game_ws import handle_connection
 from server.rooms import RoomFullError, RoomManager, RoomNotFoundError
+
+STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
 app = FastAPI(title="Poker App")
 room_manager = RoomManager()
@@ -66,3 +71,7 @@ def get_room(code: str) -> RoomStateResponse:
 @app.websocket("/ws/{code}")
 async def room_websocket(websocket: WebSocket, code: str) -> None:
     await handle_connection(websocket, code, room_manager)
+
+
+# Mounted last so it never shadows the API routes above.
+app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
