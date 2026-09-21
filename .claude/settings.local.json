@@ -1,7 +1,12 @@
 {
   "permissions": {
     "allow": [
-      "Bash(./.venv/Scripts/python.exe -m pytest -q)"
+      "Bash(./.venv/Scripts/python.exe -m pytest -q)",
+      "Bash(python -m pytest tests/test_simulation.py -q -s)",
+      "Bash(py -3.11 -m pytest --version)",
+      "Bash(python3 -m pytest --version)",
+      "Bash(pip show *)",
+      "Bash(./.venv/Scripts/python.exe -m pytest tests/test_simulation.py -q -s)"
     ]
   }
 }
