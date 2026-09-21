@@ -6,7 +6,9 @@
       "Bash(py -3.11 -m pytest --version)",
       "Bash(python3 -m pytest --version)",
       "Bash(pip show *)",
-      "Bash(./.venv/Scripts/python.exe -m pytest tests/test_simulation.py -q -s)"
+      "Bash(./.venv/Scripts/python.exe -m pytest tests/test_simulation.py -q -s)",
+      "Bash(python -c \"import fastapi, httpx, pydantic; print\\(fastapi.__version__, httpx.__version__, pydantic.VERSION\\)\")",
+      "Bash(python -m pytest -q)"
     ]
   }
 }
