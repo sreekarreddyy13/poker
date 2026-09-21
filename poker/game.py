@@ -5,6 +5,7 @@ from enum import Enum, auto
 from typing import Optional, Sequence
 
 from poker.cards import Card, Deck
+from poker.evaluator import evaluate_hand
 
 
 class Stage(Enum):
@@ -36,6 +37,13 @@ class Player:
     all_in: bool = False
     current_bet: int = 0
     has_acted: bool = False
+    total_contributed: int = 0  # chips put in this hand, across all streets
+
+
+@dataclass(frozen=True)
+class Pot:
+    amount: int
+    eligible_player_ids: tuple[str, ...]
 
 
 class Game:
@@ -67,6 +75,7 @@ class Game:
         self.min_raise = big_blind
         self.current_actor_index: Optional[int] = None
         self._deck: Optional[Deck] = None
+        self._settled = False
 
     @property
     def current_actor(self) -> Optional[str]:
@@ -88,12 +97,14 @@ class Game:
             p.all_in = False
             p.current_bet = 0
             p.has_acted = False
+            p.total_contributed = 0
 
         self.community_cards = []
         self.pot = 0
         self.current_bet = 0
         self.min_raise = self.big_blind
         self.stage = Stage.PREFLOP
+        self._settled = False
 
         self._deck = Deck()
         self._deck.shuffle()
@@ -120,6 +131,7 @@ class Game:
         cost = min(amount, player.stack)
         player.stack -= cost
         player.current_bet += cost
+        player.total_contributed += cost
         self.pot += cost
         if player.stack == 0:
             player.all_in = True
@@ -191,6 +203,7 @@ class Game:
             raise IllegalActionError("not enough chips to call; go all-in instead")
         player.stack -= to_call
         player.current_bet += to_call
+        player.total_contributed += to_call
         self.pot += to_call
         player.has_acted = True
         if player.stack == 0:
@@ -208,6 +221,7 @@ class Game:
 
         player.stack -= cost
         player.current_bet = amount
+        player.total_contributed += cost
         self.pot += cost
         self.current_bet = amount
         self.min_raise = increase
@@ -225,6 +239,7 @@ class Game:
         player.stack = 0
         player.current_bet = new_total
         player.all_in = True
+        player.total_contributed += cost
         self.pot += cost
         player.has_acted = True
 
@@ -321,3 +336,54 @@ class Game:
         for p in self.players:
             p.current_bet = 0
             p.has_acted = False
+
+    # ------------------------------------------------------------------
+    # Side pots / showdown
+
+    def compute_side_pots(self) -> list[Pot]:
+        """Split total contributions into a main pot plus a side pot per
+        distinct all-in level. A layer's chips are only won by players who
+        haven't folded, but folded players' chips still count toward it."""
+        remaining = [[p, p.total_contributed] for p in self.players if p.total_contributed > 0]
+        pots: list[Pot] = []
+        while remaining:
+            level = min(amount for _, amount in remaining)
+            eligible = tuple(p.player_id for p, _ in remaining if not p.folded)
+            pots.append(Pot(amount=level * len(remaining), eligible_player_ids=eligible))
+            for entry in remaining:
+                entry[1] -= level
+            remaining = [entry for entry in remaining if entry[1] > 0]
+        return pots
+
+    def settle_showdown(self) -> dict[str, int]:
+        if self.stage != Stage.SHOWDOWN:
+            raise IllegalActionError("cannot settle a hand before showdown")
+        if self._settled:
+            raise IllegalActionError("hand has already been settled")
+        self._settled = True
+
+        payouts = {p.player_id: 0 for p in self.players}
+        for pot in self.compute_side_pots():
+            winners = self._payout_order(self._pot_winners(pot))
+            share, remainder = divmod(pot.amount, len(winners))
+            for i, player_id in enumerate(winners):
+                payouts[player_id] += share + (1 if i < remainder else 0)
+
+        for p in self.players:
+            p.stack += payouts[p.player_id]
+        return payouts
+
+    def _pot_winners(self, pot: Pot) -> list[str]:
+        eligible = [self._get_player(pid) for pid in pot.eligible_player_ids]
+        if len(eligible) == 1:
+            return [eligible[0].player_id]
+        ranks = {p.player_id: evaluate_hand(p.hole_cards + self.community_cards) for p in eligible}
+        best = max(ranks.values())
+        return [pid for pid, rank in ranks.items() if rank == best]
+
+    def _payout_order(self, player_ids: list[str]) -> list[str]:
+        """Odd chips go to the first winner left of the button."""
+        start = self._seat_after(self.button_index)
+        seat_of = {p.player_id: i for i, p in enumerate(self.players)}
+        n = len(self.players)
+        return sorted(player_ids, key=lambda pid: (seat_of[pid] - start) % n)

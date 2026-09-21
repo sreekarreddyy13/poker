@@ -1,5 +1,6 @@
 import pytest
 
+from poker.cards import Card, Rank, Suit
 from poker.game import ActionType, Game, IllegalActionError, Stage
 
 
@@ -314,3 +315,163 @@ def test_hand_runs_to_completion_for_various_table_sizes(n_players):
 
     remaining = [p for p in game.players if not p.folded]
     assert len(remaining) == 1
+
+
+# ---------------------------------------------------------------------------
+# Side pots / showdown payout
+
+BOARD = [
+    Card(Rank.TWO, Suit.CLUBS),
+    Card(Rank.FIVE, Suit.DIAMONDS),
+    Card(Rank.NINE, Suit.HEARTS),
+    Card(Rank.JACK, Suit.CLUBS),
+    Card(Rank.KING, Suit.DIAMONDS),
+]
+
+
+def test_fold_out_winner_takes_entire_pot_without_showdown_cards():
+    game = Game(["A", "B", "C"], starting_stack=1000, small_blind=5, big_blind=10)
+    game.start_hand()
+    # button=A(0)=utg, sb=B(1) posts 5, bb=C(2) posts 10
+    game.apply_action("A", ActionType.FOLD)
+    game.apply_action("B", ActionType.FOLD)
+    assert game.stage == Stage.SHOWDOWN
+    assert game.community_cards == []
+
+    payouts = game.settle_showdown()
+
+    assert payouts == {"A": 0, "B": 0, "C": 15}
+    assert find(game, "C").stack == 1005  # 1000 - 10 (bb) + 15 (pot)
+
+
+def test_settle_showdown_before_showdown_stage_is_illegal():
+    game = Game(["A", "B"], starting_stack=1000, small_blind=5, big_blind=10)
+    game.start_hand()
+    with pytest.raises(IllegalActionError):
+        game.settle_showdown()
+
+
+def test_settle_showdown_twice_is_illegal():
+    game = Game(["A", "B", "C"], starting_stack=1000, small_blind=5, big_blind=10)
+    game.start_hand()
+    game.apply_action("A", ActionType.FOLD)
+    game.apply_action("B", ActionType.FOLD)
+
+    game.settle_showdown()
+    with pytest.raises(IllegalActionError):
+        game.settle_showdown()
+
+
+def test_single_pot_split_evenly_on_exact_tie():
+    game = Game(["A", "B"], starting_stack=1000, small_blind=5, big_blind=10)
+    game.start_hand()
+    game.apply_action("A", ActionType.CALL)
+    game.apply_action("B", ActionType.CHECK)
+    game.apply_action("B", ActionType.CHECK)
+    game.apply_action("A", ActionType.CHECK)
+    game.apply_action("B", ActionType.CHECK)
+    game.apply_action("A", ActionType.CHECK)
+    game.apply_action("B", ActionType.CHECK)
+    game.apply_action("A", ActionType.CHECK)
+    assert game.stage == Stage.SHOWDOWN
+
+    game.community_cards = BOARD
+    find(game, "A").hole_cards = [Card(Rank.THREE, Suit.CLUBS), Card(Rank.FOUR, Suit.HEARTS)]
+    find(game, "B").hole_cards = [Card(Rank.THREE, Suit.SPADES), Card(Rank.FOUR, Suit.SPADES)]
+
+    payouts = game.settle_showdown()
+
+    assert payouts == {"A": 10, "B": 10}  # pot of 20 splits evenly, no remainder
+
+
+def test_split_pot_tie_with_odd_chip_to_first_winner_left_of_button():
+    game = Game(["A", "B", "C"], starting_stack=1000, small_blind=5, big_blind=10)
+    game.start_hand()  # button=A(0); first seat left of button is B(1)
+
+    find(game, "A").total_contributed = 101
+    find(game, "B").total_contributed = 101
+    find(game, "C").total_contributed = 101
+    find(game, "C").folded = True
+    game.pot = 303
+    game.stage = Stage.SHOWDOWN
+    game.community_cards = BOARD
+    find(game, "A").hole_cards = [Card(Rank.THREE, Suit.CLUBS), Card(Rank.FOUR, Suit.DIAMONDS)]
+    find(game, "B").hole_cards = [Card(Rank.THREE, Suit.HEARTS), Card(Rank.FOUR, Suit.CLUBS)]
+
+    pots = game.compute_side_pots()
+    assert len(pots) == 1
+    assert pots[0].amount == 303
+    assert set(pots[0].eligible_player_ids) == {"A", "B"}  # C folded, excluded despite contributing
+
+    payouts = game.settle_showdown()
+
+    assert payouts == {"A": 151, "B": 152, "C": 0}  # A,B tie 151 each + 1 odd chip to B (left of button)
+    assert find(game, "B").stack == 995 + 152  # B posted the 5 sb before this hand-state was rigged
+    assert find(game, "A").stack == 1000 + 151  # A (button) posted no blind
+
+
+def test_uncalled_all_in_excess_forms_its_own_pot():
+    game = Game(["A", "B"], starting_stack=1000, small_blind=5, big_blind=10)
+    game.start_hand()  # A=button/sb (posted 5), B=bb (posted 10)
+
+    find(game, "A").stack = 30
+    game.apply_action("A", ActionType.ALL_IN)  # total_contributed A = 5 + 30 = 35
+
+    find(game, "B").stack = 500
+    game.apply_action("B", ActionType.ALL_IN)  # total_contributed B = 10 + 500 = 510
+
+    assert game.stage == Stage.SHOWDOWN
+
+    pots = game.compute_side_pots()
+    assert [p.amount for p in pots] == [70, 475]
+    assert set(pots[0].eligible_player_ids) == {"A", "B"}
+    assert pots[1].eligible_player_ids == ("B",)  # A's smaller all-in can't contest the excess
+
+    game.community_cards = BOARD
+    find(game, "A").hole_cards = [Card(Rank.THREE, Suit.CLUBS), Card(Rank.FOUR, Suit.DIAMONDS)]
+    find(game, "B").hole_cards = [Card(Rank.KING, Suit.SPADES), Card(Rank.KING, Suit.HEARTS)]
+
+    payouts = game.settle_showdown()
+
+    assert payouts == {"A": 0, "B": 545}
+    assert find(game, "B").stack == 545
+
+
+def test_three_way_all_in_with_different_stacks_forms_two_side_pots():
+    game = Game(["A", "B", "C"], starting_stack=1000, small_blind=5, big_blind=10)
+    game.start_hand()
+    # button=A(0)=utg, sb=B(1) posts 5, bb=C(2) posts 10
+    assert game.current_actor == "A"
+
+    find(game, "A").stack = 30
+    game.apply_action("A", ActionType.ALL_IN)  # total_contributed A = 0 + 30 = 30
+
+    find(game, "B").stack = 65
+    game.apply_action("B", ActionType.ALL_IN)  # total_contributed B = 5 + 65 = 70
+
+    find(game, "C").stack = 200
+    game.apply_action("C", ActionType.CALL)  # total_contributed C = 10 + 60 = 70
+
+    assert game.stage == Stage.SHOWDOWN
+    assert len(game.community_cards) == 5  # board auto-dealt out, everyone is all-in or capped
+
+    pots = game.compute_side_pots()
+    assert [p.amount for p in pots] == [90, 80]
+    assert set(pots[0].eligible_player_ids) == {"A", "B", "C"}
+    assert set(pots[1].eligible_player_ids) == {"B", "C"}
+    assert sum(p.amount for p in pots) == game.pot == 170
+
+    # Rig the board/hole cards: A has the best hand overall (wins the main
+    # pot), but B beats C head-to-head and takes the side pot A isn't
+    # eligible for despite not having the best hand at the table.
+    game.community_cards = BOARD  # 2c 5d 9h Jc Kd
+    find(game, "A").hole_cards = [Card(Rank.KING, Suit.SPADES), Card(Rank.KING, Suit.HEARTS)]  # trip kings
+    find(game, "B").hole_cards = [Card(Rank.JACK, Suit.SPADES), Card(Rank.JACK, Suit.HEARTS)]  # trip jacks
+    find(game, "C").hole_cards = [Card(Rank.NINE, Suit.SPADES), Card(Rank.NINE, Suit.DIAMONDS)]  # trip nines
+
+    payouts = game.settle_showdown()
+
+    assert payouts == {"A": 90, "B": 80, "C": 0}
+    assert find(game, "A").stack == 90
+    assert find(game, "B").stack == 80
+    assert find(game, "C").stack == 140
