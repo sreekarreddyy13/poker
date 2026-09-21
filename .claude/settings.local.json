@@ -8,7 +8,11 @@
       "Bash(pip show *)",
       "Bash(./.venv/Scripts/python.exe -m pytest tests/test_simulation.py -q -s)",
       "Bash(python -c \"import fastapi, httpx, pydantic; print\\(fastapi.__version__, httpx.__version__, pydantic.VERSION\\)\")",
-      "Bash(python -m pytest -q)"
+      "Bash(python -m pytest -q)",
+      "Bash(\"/c/Users/sreek/OneDrive/文档/DSA/POKER APP/.venv/Scripts/python.exe\" -c \"import pydantic, fastapi; print\\(pydantic.VERSION, fastapi.__version__\\)\")",
+      "Bash(./.venv/Scripts/python.exe -c 'import ast,sys *)",
+      "Bash(./.venv/Scripts/python.exe -m pyflakes server/game_ws.py server/main.py server/rooms.py)",
+      "Bash(./.venv/Scripts/python.exe -c ' *)"
     ]
   }
 }

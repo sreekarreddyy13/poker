@@ -1,13 +1,21 @@
 from __future__ import annotations
 
+import asyncio
 import secrets
 import string
 import threading
 from dataclasses import dataclass, field
+from typing import Optional
+
+from poker.game import Game
 
 CODE_ALPHABET = string.ascii_uppercase + string.digits
 CODE_LENGTH = 6
 MAX_PLAYERS = 9
+
+STARTING_STACK = 1000
+SMALL_BLIND = 5
+BIG_BLIND = 10
 
 
 class RoomError(ValueError):
@@ -32,6 +40,9 @@ class RoomPlayer:
 class Room:
     code: str
     players: list[RoomPlayer] = field(default_factory=list)
+    game: Optional[Game] = None
+    last_payouts: Optional[dict[str, int]] = None
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
 class RoomManager:

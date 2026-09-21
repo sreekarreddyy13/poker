@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket
 from pydantic import BaseModel, Field
 
+from server.game_ws import handle_connection
 from server.rooms import RoomFullError, RoomManager, RoomNotFoundError
 
 app = FastAPI(title="Poker App")
@@ -60,3 +61,8 @@ def get_room(code: str) -> RoomStateResponse:
         code=room.code,
         players=[PlayerPublic(player_id=p.player_id, name=p.name) for p in room.players],
     )
+
+
+@app.websocket("/ws/{code}")
+async def room_websocket(websocket: WebSocket, code: str) -> None:
+    await handle_connection(websocket, code, room_manager)
