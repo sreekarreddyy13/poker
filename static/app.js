@@ -36,6 +36,19 @@ const el = {
   gameError: document.getElementById("game-error"),
 };
 
+// Created here (not in index.html) so the next-hand flow only touches app.js.
+el.gameOverBanner = document.createElement("p");
+el.gameOverBanner.id = "game-over-banner";
+el.gameOverBanner.hidden = true;
+el.showdown.appendChild(el.gameOverBanner);
+
+el.nextHandBtn = document.createElement("button");
+el.nextHandBtn.id = "next-hand-btn";
+el.nextHandBtn.type = "button";
+el.nextHandBtn.textContent = "Next Hand";
+el.nextHandBtn.hidden = true;
+el.showdown.appendChild(el.nextHandBtn);
+
 let ws = null;
 let myPlayerId = null;
 let myName = null;
@@ -156,6 +169,8 @@ function leaveTable() {
   roomCode = null;
   el.table.hidden = true;
   el.lobby.hidden = false;
+  el.nextHandBtn.hidden = true;
+  el.gameOverBanner.hidden = true;
   setStatus("");
   showGameError("");
 }
@@ -172,6 +187,8 @@ function renderState(state) {
     el.stageLabel.textContent = "";
     el.holeCards.innerHTML = "";
     el.showdown.hidden = true;
+    el.nextHandBtn.hidden = true;
+    el.gameOverBanner.hidden = true;
     renderSeats(state, null);
     disableAllActions();
     return;
@@ -195,11 +212,23 @@ function renderState(state) {
         .map(([playerId, amount]) => `<li>${escapeHtml(nameById[playerId] ?? playerId)}: +${amount}</li>`)
         .join("");
     }
+    if (state.game_over) {
+      el.nextHandBtn.hidden = true;
+      el.gameOverBanner.hidden = false;
+      el.gameOverBanner.textContent = state.winner_name
+        ? `${state.winner_name} wins the game!`
+        : "Game over.";
+    } else {
+      el.gameOverBanner.hidden = true;
+      el.nextHandBtn.hidden = !state.payouts;
+    }
     disableAllActions();
     return;
   }
 
   el.showdown.hidden = true;
+  el.nextHandBtn.hidden = true;
+  el.gameOverBanner.hidden = true;
   updateActions(state, me);
 }
 
@@ -220,6 +249,7 @@ function renderSeats(state, me) {
     if (p.current_bet) parts.push(`<div class="seat-bet">Bet: ${p.current_bet}</div>`);
     if (p.folded) parts.push('<div class="badge">Folded</div>');
     if (p.all_in) parts.push('<div class="badge">All-in</div>');
+    if (p.eliminated) parts.push('<div class="badge">Eliminated</div>');
     if (!p.connected) parts.push('<div class="badge">Disconnected</div>');
     if (showBackCards) parts.push(`<div class="cards">${cardBackHtml()}${cardBackHtml()}</div>`);
 
@@ -309,6 +339,7 @@ el.raiseBtn.addEventListener("click", () => {
 el.maxRaiseBtn.addEventListener("click", () => {
   el.raiseAmount.value = el.raiseAmount.max || el.raiseAmount.value;
 });
+el.nextHandBtn.addEventListener("click", () => sendAction("next_hand"));
 
 (function init() {
   const session = loadSession();

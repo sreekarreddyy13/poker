@@ -88,6 +88,8 @@ def _player_view(room: Room, player_id: str, viewer_id: str, connected: set[str]
             view["all_in"] = game_player.all_in
             if player_id == viewer_id:
                 view["hole_cards"] = [_card_json(c) for c in game_player.hole_cards]
+        elif player_id in room.eliminated_ids:
+            view["eliminated"] = True
     return view
 
 
@@ -114,6 +116,10 @@ def build_state(room: Room, viewer_id: str, connected: set[str]) -> dict:
     }
     if game.stage == Stage.SHOWDOWN and room.last_payouts is not None:
         state["payouts"] = room.last_payouts
+    state["game_over"] = room.game_over
+    if room.game_over:
+        winner = next((p for p in room.players if p.player_id == room.winner_id), None)
+        state["winner_name"] = winner.name if winner is not None else None
     return state
 
 
@@ -134,6 +140,29 @@ def _maybe_settle(room: Room) -> None:
     room.last_payouts = game.settle_showdown()
 
 
+def _apply_next_hand(room: Room, player_id: str) -> Optional[str]:
+    game = room.game
+    if game is None or game.stage != Stage.SHOWDOWN:
+        return "no hand is ready to start"
+    if room.last_payouts is None:
+        return "the current hand has not been settled yet"
+    if room.game_over:
+        return "the game has already ended"
+    if not any(p.player_id == player_id for p in game.players):
+        return "you are not part of this game"
+
+    survivors = [p.player_id for p in game.players if p.stack > 0]
+    if len(survivors) < 2:
+        room.game_over = True
+        room.winner_id = survivors[0] if survivors else None
+        return None
+
+    removed = game.start_next_hand()
+    room.eliminated_ids.update(removed)
+    room.last_payouts = None
+    return None
+
+
 def _apply_message(room: Room, player_id: str, raw: dict) -> Optional[str]:
     """Validate and apply an incoming action. Returns an error string, or
     None on success."""
@@ -141,6 +170,9 @@ def _apply_message(room: Room, player_id: str, raw: dict) -> Optional[str]:
         request = ActionRequest.model_validate(raw)
     except ValidationError as exc:
         return str(exc)
+
+    if request.action.lower() == "next_hand":
+        return _apply_next_hand(room, player_id)
 
     action_type = ACTION_MAP.get(request.action.lower())
     if action_type is None:

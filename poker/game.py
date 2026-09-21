@@ -114,6 +114,41 @@ class Game:
         self.current_actor_index = self._seat_after(self._bb_index())
         self._sync_actor_state()
 
+    def start_next_hand(self) -> list[str]:
+        """Drop busted players, rotate the button, and start a new hand,
+        keeping remaining players' stacks. Returns removed player ids."""
+        if self.stage != Stage.SHOWDOWN:
+            raise IllegalActionError("cannot start a new hand before showdown")
+        removed = self._remove_busted_players()
+        if len(self.players) < 2:
+            raise IllegalActionError("not enough players with chips to continue")
+        self.start_hand()
+        return removed
+
+    def _remove_busted_players(self) -> list[str]:
+        survivors = [p for p in self.players if p.stack > 0]
+        removed = [p.player_id for p in self.players if p.stack <= 0]
+        if not removed:
+            return []
+
+        old_order = [p.player_id for p in self.players]
+        old_button_id = self.players[self.button_index].player_id
+        self.players = survivors
+        if not survivors:
+            self.button_index = -1
+            return removed
+
+        survivor_ids = {p.player_id for p in survivors}
+        n = len(old_order)
+        start = old_order.index(old_button_id)
+        for offset in range(1, n + 1):
+            candidate = old_order[(start + offset) % n]
+            if candidate in survivor_ids:
+                target_index = next(i for i, p in enumerate(self.players) if p.player_id == candidate)
+                self.button_index = (target_index - 1) % len(self.players)
+                break
+        return removed
+
     def _deal_hole_cards(self) -> None:
         assert self._deck is not None
         n = len(self.players)

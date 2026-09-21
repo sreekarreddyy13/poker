@@ -437,6 +437,79 @@ def test_uncalled_all_in_excess_forms_its_own_pot():
     assert find(game, "B").stack == 545
 
 
+# ---------------------------------------------------------------------------
+# start_next_hand
+
+def test_start_next_hand_rotates_button_and_preserves_stacks():
+    game = Game(["A", "B", "C"], starting_stack=1000, small_blind=5, big_blind=10)
+    game.start_hand()
+    assert game.button_index == 0
+    game.apply_action("A", ActionType.FOLD)
+    game.apply_action("B", ActionType.FOLD)
+    game.settle_showdown()
+    assert find(game, "C").stack == 1005
+    total_chips = sum(p.stack for p in game.players)
+
+    removed = game.start_next_hand()
+
+    assert removed == []
+    assert game.button_index == 1
+    assert game.stage == Stage.PREFLOP
+    assert sum(p.stack for p in game.players) + game.pot == total_chips
+
+
+def test_start_next_hand_button_skips_busted_seat():
+    game = Game(["A", "B", "C"], starting_stack=1000, small_blind=5, big_blind=10)
+    game.start_hand()
+    game.apply_action("A", ActionType.FOLD)
+    game.apply_action("B", ActionType.FOLD)
+    game.settle_showdown()
+
+    find(game, "A").stack = 0  # A had the button and is now eliminated
+
+    game.start_next_hand()
+
+    assert game.players[game.button_index].player_id == "B"
+
+
+def test_start_next_hand_removes_busted_players():
+    game = Game(["A", "B", "C"], starting_stack=1000, small_blind=5, big_blind=10)
+    game.start_hand()
+    game.apply_action("A", ActionType.FOLD)
+    game.apply_action("B", ActionType.FOLD)
+    game.settle_showdown()
+
+    find(game, "A").stack = 0
+
+    removed = game.start_next_hand()
+
+    assert removed == ["A"]
+    assert {p.player_id for p in game.players} == {"B", "C"}
+
+
+def test_start_next_hand_before_showdown_is_illegal():
+    game = Game(["A", "B"], starting_stack=1000, small_blind=5, big_blind=10)
+    game.start_hand()
+    with pytest.raises(IllegalActionError):
+        game.start_next_hand()
+
+
+def test_start_next_hand_ends_when_fewer_than_two_have_chips():
+    game = Game(["A", "B"], starting_stack=1000, small_blind=5, big_blind=10)
+    game.start_hand()
+    game.apply_action("A", ActionType.FOLD)
+    game.settle_showdown()
+
+    find(game, "A").stack = 0
+
+    with pytest.raises(IllegalActionError):
+        game.start_next_hand()
+
+
+# ---------------------------------------------------------------------------
+# Side pots / showdown payout (continued)
+
+
 def test_three_way_all_in_with_different_stacks_forms_two_side_pots():
     game = Game(["A", "B", "C"], starting_stack=1000, small_blind=5, big_blind=10)
     game.start_hand()

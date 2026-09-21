@@ -42,6 +42,9 @@ class Room:
     players: list[RoomPlayer] = field(default_factory=list)
     game: Optional[Game] = None
     last_payouts: Optional[dict[str, int]] = None
+    game_over: bool = False
+    winner_id: Optional[str] = None
+    eliminated_ids: set[str] = field(default_factory=set)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 

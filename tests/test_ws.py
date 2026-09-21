@@ -2,7 +2,9 @@ import pytest
 from fastapi import WebSocketDisconnect
 from fastapi.testclient import TestClient
 
+from poker.game import Stage
 from server.main import app, room_manager
+from server.rooms import STARTING_STACK
 
 client = TestClient(app)
 
@@ -134,3 +136,76 @@ def test_unknown_player_id_closes_connection():
     with pytest.raises(WebSocketDisconnect):
         with client.websocket_connect(f"/ws/{code}?player_id=doesnotexist") as ws:
             ws.receive_json()
+
+
+def test_next_hand_starts_a_new_hand_preserving_stacks():
+    code, (alice_id, bob_id) = _create_room_with_players(["Alice", "Bob"])
+
+    with client.websocket_connect(f"/ws/{code}?player_id={alice_id}") as alice_ws:
+        alice_ws.receive_json()  # waiting
+
+        with client.websocket_connect(f"/ws/{code}?player_id={bob_id}") as bob_ws:
+            bob_state = bob_ws.receive_json()
+            alice_state = alice_ws.receive_json()
+
+            actor_id = alice_state["current_actor"]
+            actor_ws = alice_ws if actor_id == alice_id else bob_ws
+            other_ws = bob_ws if actor_ws is alice_ws else alice_ws
+
+            actor_ws.send_json({"action": "fold"})
+            actor_showdown = actor_ws.receive_json()
+            other_ws.receive_json()
+            assert actor_showdown["stage"] == "SHOWDOWN"
+
+            actor_ws.send_json({"action": "next_hand"})
+            actor_next = actor_ws.receive_json()
+            other_next = other_ws.receive_json()
+
+    assert actor_next["stage"] == "PREFLOP"
+    assert actor_next["game_over"] is False
+    assert other_next["stage"] == "PREFLOP"
+    stacks = {p["player_id"]: p["stack"] for p in actor_next["players"]}
+    assert sum(stacks.values()) + actor_next["pot"] == 2 * STARTING_STACK
+
+
+def test_next_hand_before_showdown_is_rejected():
+    code, (alice_id, bob_id) = _create_room_with_players(["Alice", "Bob"])
+
+    with client.websocket_connect(f"/ws/{code}?player_id={alice_id}") as alice_ws:
+        alice_ws.receive_json()  # waiting
+
+        with client.websocket_connect(f"/ws/{code}?player_id={bob_id}") as bob_ws:
+            bob_ws.receive_json()
+            alice_ws.receive_json()
+
+            alice_ws.send_json({"action": "next_hand"})
+            error = alice_ws.receive_json()
+
+    assert error["type"] == "error"
+
+
+def test_next_hand_ends_game_when_only_one_player_has_chips():
+    code, (alice_id, bob_id) = _create_room_with_players(["Alice", "Bob"])
+
+    with client.websocket_connect(f"/ws/{code}?player_id={alice_id}") as alice_ws:
+        alice_ws.receive_json()  # waiting
+
+        with client.websocket_connect(f"/ws/{code}?player_id={bob_id}") as bob_ws:
+            bob_ws.receive_json()
+            alice_ws.receive_json()
+
+            room = room_manager.get_room(code)
+            game = room.game
+            next(p for p in game.players if p.player_id == alice_id).stack = 0
+            next(p for p in game.players if p.player_id == bob_id).stack = 2000
+            game.stage = Stage.SHOWDOWN
+            game.current_actor_index = None
+            room.last_payouts = {alice_id: 0, bob_id: 0}
+
+            bob_ws.send_json({"action": "next_hand"})
+            bob_final = bob_ws.receive_json()
+            alice_final = alice_ws.receive_json()
+
+    assert bob_final["game_over"] is True
+    assert bob_final["winner_name"] == "Bob"
+    assert alice_final["game_over"] is True
