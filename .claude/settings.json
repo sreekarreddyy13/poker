@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(\".venv/Scripts/python.exe\" -m pytest -q)",
+      "Bash(rm -f poker.db)",
+      "Bash(.venv/Scripts/python.exe -c ' *)"
+    ]
+  }
+}

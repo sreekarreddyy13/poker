@@ -7,6 +7,7 @@ from pydantic import BaseModel, ValidationError
 
 from poker.cards import Card
 from poker.game import ActionType, Game, IllegalActionError, Stage
+from server.db import db
 from server.rooms import (
     BIG_BLIND,
     STARTING_STACK,
@@ -138,6 +139,12 @@ def _maybe_settle(room: Room) -> None:
     if game is None or game.stage != Stage.SHOWDOWN or room.last_payouts is not None:
         return
     room.last_payouts = game.settle_showdown()
+
+    stacks_after = {p.player_id: p.stack for p in game.players}
+    db.record_hand(room.code, room.last_payouts, stacks_after)
+    names = {p.player_id: p.name for p in room.players}
+    for player_id, stack in stacks_after.items():
+        db.update_chip_balance(player_id, names[player_id], stack)
 
 
 def _apply_next_hand(room: Room, player_id: str) -> Optional[str]:
