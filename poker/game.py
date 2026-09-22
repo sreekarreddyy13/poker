@@ -446,6 +446,7 @@ class Game:
         return {
             p.player_id: describe_hand(evaluate_hand(p.hole_cards + self.community_cards))
             for p in active
+            if len(p.hole_cards) + len(self.community_cards) >= 5
         }
 
     def _pot_winners(self, pot: Pot) -> list[str]:

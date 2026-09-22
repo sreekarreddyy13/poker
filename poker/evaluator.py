@@ -59,10 +59,95 @@ def describe_hand(rank: HandRank) -> str:
     raise ValueError(f"unknown hand category {category!r}")
 
 
-def evaluate_hand(cards: Sequence[Card]) -> HandRank:
+def evaluate_hand_naive(cards: Sequence[Card]) -> HandRank:
+    """Original combinations-based evaluator, kept for correctness comparison
+    against evaluate_hand()."""
     if not 5 <= len(cards) <= 7:
         raise ValueError("evaluate_hand requires between 5 and 7 cards")
     return max(_evaluate_5(combo) for combo in combinations(cards, 5))
+
+
+_RANKS_DESC: tuple[int, ...] = tuple(range(14, 1, -1))
+
+# (high_card, bitmask) for every straight, highest first; wheel (A-2-3-4-5) last.
+_STRAIGHT_MASKS: tuple[tuple[int, int], ...] = tuple(
+    (high, sum(1 << r for r in range(high - 4, high + 1))) for high in range(14, 5, -1)
+) + ((5, (1 << 14) | (1 << 2) | (1 << 3) | (1 << 4) | (1 << 5)),)
+
+
+def _best_straight(rank_bits: int) -> int:
+    """Highest straight present in a rank bitmask (bit N set = rank N present), or 0."""
+    for high, mask in _STRAIGHT_MASKS:
+        if rank_bits & mask == mask:
+            return high
+    return 0
+
+
+def evaluate_hand(cards: Sequence[Card]) -> HandRank:
+    """Bit-manipulation evaluator: builds rank/suit bitmasks in one pass over
+    the cards instead of scoring all 21 five-card combinations."""
+    if not 5 <= len(cards) <= 7:
+        raise ValueError("evaluate_hand requires between 5 and 7 cards")
+
+    rank_counts = [0] * 15
+    suit_bits = [0, 0, 0, 0]
+    suit_counts = [0, 0, 0, 0]
+    all_bits = 0
+
+    for c in cards:
+        r = int(c.rank)
+        s = int(c.suit)
+        bit = 1 << r
+        rank_counts[r] += 1
+        suit_bits[s] |= bit
+        suit_counts[s] += 1
+        all_bits |= bit
+
+    flush_suit = next((s for s in range(4) if suit_counts[s] >= 5), None)
+    if flush_suit is not None:
+        straight_high = _best_straight(suit_bits[flush_suit])
+        if straight_high:
+            return (HandCategory.STRAIGHT_FLUSH, straight_high)
+
+    quad_rank = next((r for r in _RANKS_DESC if rank_counts[r] == 4), None)
+    if quad_rank is not None:
+        kicker = next(r for r in _RANKS_DESC if rank_counts[r] and r != quad_rank)
+        return (HandCategory.FOUR_OF_A_KIND, quad_rank, kicker)
+
+    trip_ranks = [r for r in _RANKS_DESC if rank_counts[r] == 3]
+    pair_plus_ranks = [r for r in _RANKS_DESC if rank_counts[r] >= 2]
+
+    if trip_ranks:
+        best_trip = trip_ranks[0]
+        pair_candidates = [r for r in pair_plus_ranks if r != best_trip]
+        if pair_candidates:
+            return (HandCategory.FULL_HOUSE, best_trip, pair_candidates[0])
+
+    if flush_suit is not None:
+        flush_ranks = [r for r in _RANKS_DESC if suit_bits[flush_suit] & (1 << r)][:5]
+        return (HandCategory.FLUSH, *flush_ranks)
+
+    straight_high = _best_straight(all_bits)
+    if straight_high:
+        return (HandCategory.STRAIGHT, straight_high)
+
+    if trip_ranks:
+        best_trip = trip_ranks[0]
+        kickers = [r for r in _RANKS_DESC if rank_counts[r] and r != best_trip][:2]
+        return (HandCategory.THREE_OF_A_KIND, best_trip, *kickers)
+
+    if len(pair_plus_ranks) >= 2:
+        top_pairs = pair_plus_ranks[:2]
+        kicker = next(r for r in _RANKS_DESC if rank_counts[r] and r not in top_pairs)
+        return (HandCategory.TWO_PAIR, top_pairs[0], top_pairs[1], kicker)
+
+    if len(pair_plus_ranks) == 1:
+        pair_rank = pair_plus_ranks[0]
+        kickers = [r for r in _RANKS_DESC if rank_counts[r] and r != pair_rank][:3]
+        return (HandCategory.PAIR, pair_rank, *kickers)
+
+    top5 = [r for r in _RANKS_DESC if rank_counts[r]][:5]
+    return (HandCategory.HIGH_CARD, *top5)
 
 
 def _check_straight(unique_ranks_desc: list[int]) -> tuple[bool, int]:

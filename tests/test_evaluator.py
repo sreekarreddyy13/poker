@@ -1,7 +1,9 @@
+import random
+
 import pytest
 
 from poker.cards import Card, Rank, Suit
-from poker.evaluator import HandCategory, describe_hand, evaluate_hand
+from poker.evaluator import HandCategory, describe_hand, evaluate_hand, evaluate_hand_naive
 
 
 def C(rank: Rank, suit: Suit) -> Card:
@@ -430,6 +432,14 @@ def test_describe_royal_flush():
         C(Rank.KING, Suit.SPADES), C(Rank.ACE, Suit.SPADES),
     ]
     assert describe_hand(evaluate_hand(hand)) == "Royal Flush"
+
+
+def test_fast_evaluator_matches_naive_on_random_hands():
+    deck = [Card(rank, suit) for suit in Suit for rank in Rank]
+    rng = random.Random(12345)
+    for _ in range(100_000):
+        hand = rng.sample(deck, 7)
+        assert evaluate_hand(hand) == evaluate_hand_naive(hand)
 
 
 def test_describe_tied_hands_get_identical_description():
