@@ -12,7 +12,7 @@ from poker.game import Game
 
 CODE_ALPHABET = string.ascii_uppercase + string.digits
 CODE_LENGTH = 6
-MAX_PLAYERS = 9
+MAX_PLAYERS = 6
 
 STARTING_STACK = 1000
 SMALL_BLIND = 5

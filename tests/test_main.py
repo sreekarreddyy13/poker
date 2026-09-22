@@ -81,7 +81,7 @@ def test_join_room_rejects_duplicate_name_from_connected_player():
 
 def test_join_room_full_returns_409():
     code = create_room()
-    for i in range(9):
+    for i in range(6):
         response = client.post(f"/rooms/{code}/join", json={"name": f"P{i}"})
         assert response.status_code == 200
     response = client.post(f"/rooms/{code}/join", json={"name": "Overflow"})
