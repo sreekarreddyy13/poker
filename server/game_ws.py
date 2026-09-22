@@ -216,11 +216,18 @@ def _apply_next_hand(room: Room, player_id: str) -> Optional[str]:
     if not any(p.player_id == player_id for p in game.players):
         return "you are not part of this game"
 
+    seated_ids = {p.player_id for p in game.players}
+    connected = connection_manager.connected_ids(room.code)
+    pending = [p for p in room.players if p.player_id not in seated_ids and p.player_id in connected]
+
     survivors = [p.player_id for p in game.players if p.stack > 0]
-    if len(survivors) < 2:
+    if len(survivors) < 2 and not pending:
         room.game_over = True
         room.winner_id = survivors[0] if survivors else None
         return None
+
+    for p in pending:
+        game.add_player(p.player_id, STARTING_STACK)
 
     removed = game.start_next_hand()
     room.eliminated_ids.update(removed)

@@ -114,6 +114,17 @@ class Game:
         self.current_actor_index = self._seat_after(self._bb_index())
         self._sync_actor_state()
 
+    def add_player(self, player_id: str, stack: int) -> None:
+        """Seat a new player between hands; they'll be dealt in from the next
+        start_hand() onward. Cannot be used while a hand is in progress."""
+        if self.stage is not None and self.stage != Stage.SHOWDOWN:
+            raise IllegalActionError("cannot add a player while a hand is in progress")
+        if any(p.player_id == player_id for p in self.players):
+            raise IllegalActionError(f"player {player_id} is already seated")
+        if len(self.players) >= 9:
+            raise IllegalActionError("table is full")
+        self.players.append(Player(player_id, stack))
+
     def start_next_hand(self) -> list[str]:
         """Drop busted players, rotate the button, and start a new hand,
         keeping remaining players' stacks. Returns removed player ids."""

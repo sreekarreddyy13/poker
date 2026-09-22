@@ -154,15 +154,24 @@ async function createRoom() {
   }
 }
 
-async function joinRoom(code, name) {
+function extractErrorMessage(body, fallback) {
+  const detail = body && body.detail;
+  if (typeof detail === "string" && detail) return detail;
+  if (Array.isArray(detail) && detail.length > 0) {
+    return detail.map((d) => (d && d.msg) || String(d)).join("; ");
+  }
+  return fallback;
+}
+
+async function joinRoom(code, name, playerId) {
   const res = await fetch(`/rooms/${encodeURIComponent(code)}/join`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name }),
+    body: JSON.stringify(playerId ? { name, player_id: playerId } : { name }),
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error(body.detail || "Could not join room");
+    throw new Error(extractErrorMessage(body, "Could not join room"));
   }
   return res.json();
 }
@@ -355,7 +364,9 @@ el.joinForm.addEventListener("submit", async (event) => {
 
   showLobbyMessage("");
   try {
-    const player = await joinRoom(code, name);
+    const session = loadSession();
+    const existingPlayerId = session && session.roomCode === code ? session.myPlayerId : undefined;
+    const player = await joinRoom(code, name, existingPlayerId);
     myPlayerId = player.player_id;
     myName = player.name;
     roomCode = player.code;

@@ -184,6 +184,47 @@ def test_next_hand_before_showdown_is_rejected():
     assert error["type"] == "error"
 
 
+def test_joining_mid_hand_is_queued_until_next_hand():
+    code, (alice_id, bob_id) = _create_room_with_players(["Alice", "Bob"])
+
+    with client.websocket_connect(f"/ws/{code}?player_id={alice_id}") as alice_ws:
+        alice_ws.receive_json()  # waiting
+
+        with client.websocket_connect(f"/ws/{code}?player_id={bob_id}") as bob_ws:
+            bob_state = bob_ws.receive_json()
+            alice_state = alice_ws.receive_json()
+
+            carol_id = client.post(f"/rooms/{code}/join", json={"name": "Carol"}).json()["player_id"]
+
+            with client.websocket_connect(f"/ws/{code}?player_id={carol_id}") as carol_ws:
+                carol_state = carol_ws.receive_json()
+                bob_ws.receive_json()
+                alice_ws.receive_json()
+
+                carol_view = next(p for p in carol_state["players"] if p["player_id"] == carol_id)
+                assert "stack" not in carol_view  # not dealt into the hand in progress
+
+                actor_id = alice_state["current_actor"]
+                actor_ws = alice_ws if actor_id == alice_id else bob_ws
+                other_ws = bob_ws if actor_ws is alice_ws else alice_ws
+
+                actor_ws.send_json({"action": "fold"})
+                actor_ws.receive_json()
+                other_ws.receive_json()
+                carol_ws.receive_json()
+
+                actor_ws.send_json({"action": "next_hand"})
+                actor_next = actor_ws.receive_json()
+                other_ws.receive_json()
+                carol_next = carol_ws.receive_json()
+
+    assert actor_next["stage"] == "PREFLOP"
+    assert len(actor_next["players"]) == 3
+    carol_own_view = next(p for p in carol_next["players"] if p["player_id"] == carol_id)
+    assert carol_own_view["stack"] > 0
+    assert len(carol_own_view["hole_cards"]) == 2
+
+
 def test_next_hand_ends_game_when_only_one_player_has_chips():
     code, (alice_id, bob_id) = _create_room_with_players(["Alice", "Bob"])
 

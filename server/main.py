@@ -1,13 +1,20 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Optional
 
 from fastapi import FastAPI, HTTPException, WebSocket
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
-from server.game_ws import handle_connection
-from server.rooms import RoomFullError, RoomManager, RoomNotFoundError
+from server.game_ws import connection_manager, handle_connection
+from server.rooms import (
+    InvalidNameError,
+    NameTakenError,
+    RoomFullError,
+    RoomManager,
+    RoomNotFoundError,
+)
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
@@ -21,6 +28,15 @@ class CreateRoomResponse(BaseModel):
 
 class JoinRoomRequest(BaseModel):
     name: str = Field(min_length=1, max_length=32)
+    player_id: Optional[str] = None
+
+    @field_validator("name")
+    @classmethod
+    def _name_not_blank(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("name must not be blank")
+        return stripped
 
 
 class JoinRoomResponse(BaseModel):
@@ -48,11 +64,20 @@ def create_room() -> CreateRoomResponse:
 @app.post("/rooms/{code}/join", response_model=JoinRoomResponse)
 def join_room(code: str, body: JoinRoomRequest) -> JoinRoomResponse:
     try:
-        player = room_manager.join_room(code, body.name)
+        player = room_manager.join_room(
+            code,
+            body.name,
+            player_id=body.player_id,
+            connected_ids=connection_manager.connected_ids(code),
+        )
     except RoomNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except RoomFullError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except NameTakenError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except InvalidNameError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return JoinRoomResponse(player_id=player.player_id, name=player.name, code=code)
 
 

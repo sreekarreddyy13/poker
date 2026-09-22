@@ -49,6 +49,36 @@ def test_join_room_rejects_empty_name():
     assert response.status_code == 422
 
 
+def test_join_room_rejects_whitespace_only_name():
+    code = create_room()
+    response = client.post(f"/rooms/{code}/join", json={"name": "   "})
+    assert response.status_code == 422
+
+
+def test_join_room_same_player_id_reconnects_instead_of_duplicating():
+    code = create_room()
+    first = client.post(f"/rooms/{code}/join", json={"name": "Alice"}).json()
+
+    second = client.post(
+        f"/rooms/{code}/join", json={"name": "Alice", "player_id": first["player_id"]}
+    ).json()
+    assert second["player_id"] == first["player_id"]
+
+    players = client.get(f"/rooms/{code}").json()["players"]
+    assert len(players) == 1
+
+
+def test_join_room_rejects_duplicate_name_from_connected_player():
+    code = create_room()
+    alice = client.post(f"/rooms/{code}/join", json={"name": "Alice"}).json()
+
+    with client.websocket_connect(f"/ws/{code}?player_id={alice['player_id']}") as ws:
+        ws.receive_json()  # waiting
+        response = client.post(f"/rooms/{code}/join", json={"name": "alice"})
+
+    assert response.status_code == 409
+
+
 def test_join_room_full_returns_409():
     code = create_room()
     for i in range(9):

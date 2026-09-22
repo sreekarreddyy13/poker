@@ -5,7 +5,7 @@ import secrets
 import string
 import threading
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Collection, Optional
 
 from poker.game import Game
 
@@ -30,6 +30,14 @@ class RoomNotFoundError(RoomError):
 
 
 class RoomFullError(RoomError):
+    pass
+
+
+class NameTakenError(RoomError):
+    pass
+
+
+class InvalidNameError(RoomError):
     pass
 
 
@@ -72,13 +80,37 @@ class RoomManager:
                 raise RoomNotFoundError(f"no room with code {code!r}")
             return room
 
-    def join_room(self, code: str, name: str) -> RoomPlayer:
+    def join_room(
+        self,
+        code: str,
+        name: str,
+        player_id: Optional[str] = None,
+        connected_ids: Collection[str] = (),
+    ) -> RoomPlayer:
+        name = name.strip()
+        if not name:
+            raise InvalidNameError("name must not be blank")
         with self._lock:
             room = self._rooms.get(code)
             if room is None:
                 raise RoomNotFoundError(f"no room with code {code!r}")
+
+            if player_id is not None:
+                existing = next((p for p in room.players if p.player_id == player_id), None)
+                if existing is not None:
+                    return existing  # same seat, reconnecting
+
+            if any(
+                p.name.lower() == name.lower() and p.player_id in connected_ids
+                for p in room.players
+            ):
+                raise NameTakenError(f"name {name!r} is already taken in this room")
+
             if len(room.players) >= MAX_PLAYERS:
                 raise RoomFullError(f"room {code!r} is full")
+
+            # A client-supplied player_id only ever resolves an existing seat
+            # (above); new seats always get a fresh server-issued id.
             player = RoomPlayer(player_id=secrets.token_hex(8), name=name)
             room.players.append(player)
             return player
