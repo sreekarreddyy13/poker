@@ -84,11 +84,15 @@ def test_settling_a_hand_over_websocket_persists_history_and_balances(isolated_g
     code, (alice_id, bob_id) = _create_room_with_players(["Alice", "Bob"])
 
     with client.websocket_connect(f"/ws/{code}?player_id={alice_id}") as alice_ws:
-        alice_ws.receive_json()  # waiting
+        alice_ws.receive_json()  # lobby: alice alone
 
         with client.websocket_connect(f"/ws/{code}?player_id={bob_id}") as bob_ws:
-            bob_state = bob_ws.receive_json()
+            bob_ws.receive_json()  # lobby broadcast to bob
+            alice_ws.receive_json()  # lobby broadcast to alice
+
+            alice_ws.send_json({"action": "start_match"})
             alice_state = alice_ws.receive_json()
+            bob_state = bob_ws.receive_json()
 
             actor_id = alice_state["current_actor"]
             actor_ws = alice_ws if actor_id == alice_id else bob_ws

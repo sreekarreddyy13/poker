@@ -31,6 +31,13 @@ def _create_room_with_players(names: list[str]) -> tuple[str, list[str]]:
     return code, player_ids
 
 
+def _start_match(host_ws, *other_ws):
+    """Host starts the match; returns the resulting state for host_ws
+    followed by each of other_ws, in the order given."""
+    host_ws.send_json({"action": "start_match"})
+    return [host_ws.receive_json()] + [ws.receive_json() for ws in other_ws]
+
+
 def _wait_until(predicate, timeout: float = 2.0, interval: float = 0.02) -> None:
     """Poll instead of sleeping a fixed amount, so we react as soon as a
     timeout-driven transition happens rather than risking a second timeout
@@ -48,11 +55,13 @@ def test_timeout_auto_checks_when_legal_and_advances_stage(monkeypatch: pytest.M
     code, (alice_id, bob_id) = _create_room_with_players(["Alice", "Bob"])
 
     with client.websocket_connect(f"/ws/{code}?player_id={alice_id}") as alice_ws:
-        alice_ws.receive_json()  # waiting
+        alice_ws.receive_json()  # lobby: alice alone
 
         with client.websocket_connect(f"/ws/{code}?player_id={bob_id}") as bob_ws:
-            bob_state = bob_ws.receive_json()
-            alice_state = alice_ws.receive_json()
+            bob_ws.receive_json()  # lobby broadcast to bob
+            alice_ws.receive_json()  # lobby broadcast to alice
+
+            alice_state, bob_state = _start_match(alice_ws, bob_ws)
 
             actor_id = alice_state["current_actor"]
             actor_ws = alice_ws if actor_id == alice_id else bob_ws
@@ -92,11 +101,13 @@ def test_timeout_auto_folds_when_facing_a_bet_ends_heads_up_hand(monkeypatch: py
     code, (alice_id, bob_id) = _create_room_with_players(["Alice", "Bob"])
 
     with client.websocket_connect(f"/ws/{code}?player_id={alice_id}") as alice_ws:
-        alice_ws.receive_json()  # waiting
+        alice_ws.receive_json()  # lobby: alice alone
 
         with client.websocket_connect(f"/ws/{code}?player_id={bob_id}") as bob_ws:
-            bob_ws.receive_json()
-            alice_ws.receive_json()
+            bob_ws.receive_json()  # lobby broadcast to bob
+            alice_ws.receive_json()  # lobby broadcast to alice
+
+            _start_match(alice_ws, bob_ws)
 
             # the first actor faces the big blind (to_call > 0) and never acts.
             # Poll for the fully-settled condition, since stage, last_payouts
@@ -120,11 +131,13 @@ def test_disconnected_actor_auto_folds_after_grace_period_not_full_timeout(monke
     code, (alice_id, bob_id) = _create_room_with_players(["Alice", "Bob"])
 
     with client.websocket_connect(f"/ws/{code}?player_id={alice_id}") as alice_ws:
-        alice_ws.receive_json()  # waiting
+        alice_ws.receive_json()  # lobby: alice alone
 
         with client.websocket_connect(f"/ws/{code}?player_id={bob_id}") as bob_ws:
-            bob_state = bob_ws.receive_json()
-            alice_state = alice_ws.receive_json()
+            bob_ws.receive_json()  # lobby broadcast to bob
+            alice_ws.receive_json()  # lobby broadcast to alice
+
+            alice_state, bob_state = _start_match(alice_ws, bob_ws)
 
             actor_id = alice_state["current_actor"]
             actor_ws = alice_ws if actor_id == alice_id else bob_ws
@@ -151,11 +164,13 @@ def test_no_timer_left_armed_after_hand_ends_via_manual_action():
     code, (alice_id, bob_id) = _create_room_with_players(["Alice", "Bob"])
 
     with client.websocket_connect(f"/ws/{code}?player_id={alice_id}") as alice_ws:
-        alice_ws.receive_json()  # waiting
+        alice_ws.receive_json()  # lobby: alice alone
 
         with client.websocket_connect(f"/ws/{code}?player_id={bob_id}") as bob_ws:
-            bob_state = bob_ws.receive_json()
-            alice_state = alice_ws.receive_json()
+            bob_ws.receive_json()  # lobby broadcast to bob
+            alice_ws.receive_json()  # lobby broadcast to alice
+
+            alice_state, bob_state = _start_match(alice_ws, bob_ws)
 
             actor_id = alice_state["current_actor"]
             actor_ws = alice_ws if actor_id == alice_id else bob_ws
@@ -177,11 +192,13 @@ def test_chip_conservation_holds_through_timeout_driven_actions(monkeypatch: pyt
     code, (alice_id, bob_id) = _create_room_with_players(["Alice", "Bob"])
 
     with client.websocket_connect(f"/ws/{code}?player_id={alice_id}") as alice_ws:
-        alice_ws.receive_json()  # waiting
+        alice_ws.receive_json()  # lobby: alice alone
 
         with client.websocket_connect(f"/ws/{code}?player_id={bob_id}") as bob_ws:
-            bob_state = bob_ws.receive_json()
-            alice_state = alice_ws.receive_json()
+            bob_ws.receive_json()  # lobby broadcast to bob
+            alice_ws.receive_json()  # lobby broadcast to alice
+
+            alice_state, bob_state = _start_match(alice_ws, bob_ws)
 
             actor_id = alice_state["current_actor"]
             actor_ws = alice_ws if actor_id == alice_id else bob_ws
@@ -206,3 +223,72 @@ def test_chip_conservation_holds_through_timeout_driven_actions(monkeypatch: pyt
 
     assert other_final["stage"] == "SHOWDOWN"
     assert sum(p.stack for p in room.game.players) == 2 * STARTING_STACK
+
+
+def test_turn_deadline_is_stable_across_broadcasts_within_same_turn():
+    code, (alice_id, bob_id) = _create_room_with_players(["Alice", "Bob"])
+    carol_id = client.post(f"/rooms/{code}/join", json={"name": "Carol"}).json()["player_id"]
+
+    with client.websocket_connect(f"/ws/{code}?player_id={alice_id}") as alice_ws:
+        alice_ws.receive_json()  # lobby: alice alone
+
+        with client.websocket_connect(f"/ws/{code}?player_id={bob_id}") as bob_ws:
+            bob_ws.receive_json()  # lobby broadcast to bob
+            alice_ws.receive_json()  # lobby broadcast to alice
+
+            alice_state, bob_state = _start_match(alice_ws, bob_ws)
+
+            first_deadline = alice_state["turn_deadline"]
+            assert isinstance(first_deadline, float)
+            assert bob_state["turn_deadline"] == first_deadline
+
+            # Carol connecting mid-turn broadcasts a fresh state to everyone,
+            # but it isn't a new turn, so the deadline must not move.
+            with client.websocket_connect(f"/ws/{code}?player_id={carol_id}") as carol_ws:
+                carol_state = carol_ws.receive_json()
+                bob_state2 = bob_ws.receive_json()
+                alice_state2 = alice_ws.receive_json()
+
+    assert carol_state["turn_deadline"] == first_deadline
+    assert bob_state2["turn_deadline"] == first_deadline
+    assert alice_state2["turn_deadline"] == first_deadline
+
+
+def test_rejoining_mid_turn_does_not_reset_the_deadline():
+    code, (alice_id, bob_id) = _create_room_with_players(["Alice", "Bob"])
+
+    with client.websocket_connect(f"/ws/{code}?player_id={alice_id}") as alice_ws:
+        alice_ws.receive_json()  # lobby: alice alone
+
+        with client.websocket_connect(f"/ws/{code}?player_id={bob_id}") as bob_ws:
+            bob_ws.receive_json()  # lobby broadcast to bob
+            alice_ws.receive_json()  # lobby broadcast to alice
+
+            alice_state, bob_state = _start_match(alice_ws, bob_ws)
+            first_deadline = alice_state["turn_deadline"]
+
+            actor_id = alice_state["current_actor"]
+            actor_ws = alice_ws if actor_id == alice_id else bob_ws
+            other_ws = bob_ws if actor_ws is alice_ws else alice_ws
+
+            # The current actor "clicks Join again": a second websocket for
+            # the same player_id connects, replacing the first, exactly like
+            # an existing player rejoining rather than a fresh disconnect.
+            with client.websocket_connect(f"/ws/{code}?player_id={actor_id}") as rejoin_ws:
+                rejoin_state = rejoin_ws.receive_json()
+                other_state = other_ws.receive_json()
+
+                # The old connection's own disconnect handling (triggered by
+                # being replaced) runs as an independent background task and
+                # could still rearm the timer slightly later. Force it to
+                # run now and confirm the deadline is untouched, checking the
+                # room's actual state directly rather than trusting
+                # message-pump timing (see module docstring).
+                actor_ws.close()
+                time.sleep(0.2)
+                room = room_manager.get_room(code)
+                assert room.turn_deadline == first_deadline
+
+    assert rejoin_state["turn_deadline"] == first_deadline
+    assert other_state["turn_deadline"] == first_deadline
+    assert rejoin_state["current_actor"] == actor_id

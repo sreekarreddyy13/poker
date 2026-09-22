@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Optional, Sequence
+from typing import Collection, Optional, Sequence
 
 from poker.cards import Card, Deck
-from poker.evaluator import evaluate_hand
+from poker.evaluator import describe_hand, evaluate_hand
 
 
 class Stage(Enum):
@@ -130,15 +130,28 @@ class Game:
         keeping remaining players' stacks. Returns removed player ids."""
         if self.stage != Stage.SHOWDOWN:
             raise IllegalActionError("cannot start a new hand before showdown")
-        removed = self._remove_busted_players()
+        busted = {p.player_id for p in self.players if p.stack <= 0}
+        removed = self._remove_players(busted)
         if len(self.players) < 2:
             raise IllegalActionError("not enough players with chips to continue")
         self.start_hand()
         return removed
 
-    def _remove_busted_players(self) -> list[str]:
-        survivors = [p for p in self.players if p.stack > 0]
-        removed = [p.player_id for p in self.players if p.stack <= 0]
+    def remove_players(self, player_ids: Collection[str]) -> list[str]:
+        """Remove seated players between hands (e.g. they disconnected and
+        are sitting out this hand). Cannot be used while a hand is in
+        progress. Returns the ids actually removed."""
+        if self.stage is not None and self.stage != Stage.SHOWDOWN:
+            raise IllegalActionError("cannot remove a player while a hand is in progress")
+        ids = set(player_ids)
+        unknown = ids - {p.player_id for p in self.players}
+        if unknown:
+            raise IllegalActionError(f"unknown player(s) {sorted(unknown)}")
+        return self._remove_players(ids)
+
+    def _remove_players(self, ids: set[str]) -> list[str]:
+        survivors = [p for p in self.players if p.player_id not in ids]
+        removed = [p.player_id for p in self.players if p.player_id in ids]
         if not removed:
             return []
 
@@ -245,12 +258,13 @@ class Game:
         to_call = self.current_bet - player.current_bet
         if to_call <= 0:
             raise IllegalActionError("nothing to call; check instead")
-        if to_call > player.stack:
-            raise IllegalActionError("not enough chips to call; go all-in instead")
-        player.stack -= to_call
-        player.current_bet += to_call
-        player.total_contributed += to_call
-        self.pot += to_call
+        # A short-stacked call is legal: it's capped at the player's stack
+        # and just goes all-in for less than the full amount owed.
+        cost = min(to_call, player.stack)
+        player.stack -= cost
+        player.current_bet += cost
+        player.total_contributed += cost
+        self.pot += cost
         player.has_acted = True
         if player.stack == 0:
             player.all_in = True
@@ -418,6 +432,21 @@ class Game:
         for p in self.players:
             p.stack += payouts[p.player_id]
         return payouts
+
+    def showdown_hands(self) -> dict[str, str]:
+        """Hand category description for each player whose cards were
+        actually compared at showdown. Empty before showdown, and empty if
+        the pot was won uncontested (everyone else folded) since no hand is
+        shown in that case."""
+        if self.stage != Stage.SHOWDOWN:
+            return {}
+        active = [p for p in self.players if not p.folded]
+        if len(active) < 2:
+            return {}
+        return {
+            p.player_id: describe_hand(evaluate_hand(p.hole_cards + self.community_cards))
+            for p in active
+        }
 
     def _pot_winners(self, pot: Pot) -> list[str]:
         eligible = [self._get_player(pid) for pid in pot.eligible_player_ids]

@@ -49,12 +49,46 @@ el.nextHandBtn.textContent = "Next Hand";
 el.nextHandBtn.hidden = true;
 el.showdown.appendChild(el.nextHandBtn);
 
+el.waitingForPlayersBanner = document.createElement("p");
+el.waitingForPlayersBanner.id = "waiting-for-players-banner";
+el.waitingForPlayersBanner.textContent = "Waiting for enough connected players to continue…";
+el.waitingForPlayersBanner.hidden = true;
+el.showdown.appendChild(el.waitingForPlayersBanner);
+
+// Shows this player's hand category ("Two Pair, Kings and Fours") under
+// their hole cards when their hand was shown at showdown.
+el.holeCardsCategory = document.createElement("p");
+el.holeCardsCategory.id = "hole-cards-category";
+el.holeCardsCategory.className = "hand-category";
+el.holeCardsCategory.hidden = true;
+el.holeCards.insertAdjacentElement("afterend", el.holeCardsCategory);
+
 // Countdown for the current actor's turn; created here so index.html/style.css
 // don't need to change.
 el.turnTimer = document.createElement("div");
 el.turnTimer.id = "turn-timer";
 el.turnTimer.hidden = true;
 el.stageLabel.insertAdjacentElement("afterend", el.turnTimer);
+
+// Lobby stage: shown while the room is WAITING for the host to start the
+// match. Built here for the same reason as the elements above.
+el.lobbyCount = document.createElement("p");
+el.lobbyCount.id = "lobby-count";
+el.lobbyCount.hidden = true;
+el.waitingBanner.insertAdjacentElement("afterend", el.lobbyCount);
+
+el.startMatchBtn = document.createElement("button");
+el.startMatchBtn.id = "start-match-btn";
+el.startMatchBtn.type = "button";
+el.startMatchBtn.textContent = "Start Match";
+el.startMatchBtn.hidden = true;
+el.lobbyCount.insertAdjacentElement("afterend", el.startMatchBtn);
+
+el.waitingForHostBanner = document.createElement("p");
+el.waitingForHostBanner.id = "waiting-for-host-banner";
+el.waitingForHostBanner.textContent = "Waiting for the host to start the match…";
+el.waitingForHostBanner.hidden = true;
+el.startMatchBtn.insertAdjacentElement("afterend", el.waitingForHostBanner);
 
 let ws = null;
 let myPlayerId = null;
@@ -115,9 +149,18 @@ function updateTurnTimerDisplay() {
   el.turnTimer.textContent = `Time left: ${remaining}s`;
 }
 
-function startTurnTimer(secondsRemaining) {
-  turnDeadlineMs = Date.now() + secondsRemaining * 1000;
+// deadlineSeconds is a fixed server clock timestamp (seconds since epoch) at
+// which the current turn expires, not a duration. Reading it straight off
+// each state message (instead of re-deriving "time left" from a duration
+// every time one arrives) keeps the countdown from jumping around: it only
+// moves when the server actually starts a new turn and sends a new deadline.
+function startTurnTimer(deadlineSeconds) {
+  const deadlineMs = deadlineSeconds * 1000;
   el.turnTimer.hidden = false;
+  if (deadlineMs === turnDeadlineMs) {
+    return;
+  }
+  turnDeadlineMs = deadlineMs;
   updateTurnTimerDisplay();
   if (turnTimerInterval === null) {
     turnTimerInterval = setInterval(updateTurnTimerDisplay, 250);
@@ -213,6 +256,11 @@ function leaveTable() {
   el.lobby.hidden = false;
   el.nextHandBtn.hidden = true;
   el.gameOverBanner.hidden = true;
+  el.waitingForPlayersBanner.hidden = true;
+  el.holeCardsCategory.hidden = true;
+  el.lobbyCount.hidden = true;
+  el.startMatchBtn.hidden = true;
+  el.waitingForHostBanner.hidden = true;
   stopTurnTimer();
   setStatus("");
   showGameError("");
@@ -222,34 +270,57 @@ function renderState(state) {
   roomCode = state.code;
   el.roomCodeDisplay.textContent = state.code;
 
-  el.waitingBanner.hidden = !state.waiting;
+  const isLobby = state.room_status === "WAITING";
+  el.waitingBanner.hidden = isLobby || !state.waiting;
 
   if (state.waiting) {
     el.communityCards.innerHTML = "";
     el.potAmount.textContent = "0";
     el.stageLabel.textContent = "";
     el.holeCards.innerHTML = "";
+    el.holeCardsCategory.hidden = true;
     el.showdown.hidden = true;
     el.nextHandBtn.hidden = true;
     el.gameOverBanner.hidden = true;
+    el.waitingForPlayersBanner.hidden = true;
     stopTurnTimer();
     renderSeats(state, null);
     disableAllActions();
+
+    if (isLobby) {
+      const isHost = state.host_id != null && state.host_id === myPlayerId;
+      const count = state.players.length;
+      el.lobbyCount.hidden = false;
+      el.lobbyCount.textContent = `${count} player${count === 1 ? "" : "s"} in the lobby`;
+      el.startMatchBtn.hidden = !isHost;
+      el.startMatchBtn.disabled = count < 2;
+      el.waitingForHostBanner.hidden = isHost;
+    } else {
+      el.lobbyCount.hidden = true;
+      el.startMatchBtn.hidden = true;
+      el.waitingForHostBanner.hidden = true;
+    }
     return;
   }
+
+  el.lobbyCount.hidden = true;
+  el.startMatchBtn.hidden = true;
+  el.waitingForHostBanner.hidden = true;
 
   el.stageLabel.textContent = state.stage;
   el.potAmount.textContent = String(state.pot);
   renderCards(el.communityCards, state.community_cards);
 
-  if (typeof state.turn_expires_in === "number") {
-    startTurnTimer(state.turn_expires_in);
+  if (typeof state.turn_deadline === "number") {
+    startTurnTimer(state.turn_deadline);
   } else {
     stopTurnTimer();
   }
 
   const me = state.players.find((p) => p.player_id === myPlayerId);
   renderCards(el.holeCards, me ? me.hole_cards : []);
+  el.holeCardsCategory.hidden = !(me && me.hand_category);
+  if (me && me.hand_category) el.holeCardsCategory.textContent = me.hand_category;
 
   renderSeats(state, me);
 
@@ -257,19 +328,32 @@ function renderState(state) {
     el.showdown.hidden = !state.payouts;
     if (state.payouts) {
       const nameById = Object.fromEntries(state.players.map((p) => [p.player_id, p.name]));
+      const categoryById = Object.fromEntries(
+        state.players.filter((p) => p.hand_category).map((p) => [p.player_id, p.hand_category])
+      );
       el.payoutsList.innerHTML = Object.entries(state.payouts)
         .filter(([, amount]) => amount > 0)
-        .map(([playerId, amount]) => `<li>${escapeHtml(nameById[playerId] ?? playerId)}: +${amount}</li>`)
+        .map(([playerId, amount]) => {
+          const category = categoryById[playerId];
+          const suffix = category ? ` (${escapeHtml(category)})` : "";
+          return `<li>${escapeHtml(nameById[playerId] ?? playerId)}: +${amount}${suffix}</li>`;
+        })
         .join("");
     }
     if (state.game_over) {
       el.nextHandBtn.hidden = true;
+      el.waitingForPlayersBanner.hidden = true;
       el.gameOverBanner.hidden = false;
       el.gameOverBanner.textContent = state.winner_name
         ? `${state.winner_name} wins the game!`
         : "Game over.";
+    } else if (state.waiting_for_players) {
+      el.gameOverBanner.hidden = true;
+      el.nextHandBtn.hidden = true;
+      el.waitingForPlayersBanner.hidden = false;
     } else {
       el.gameOverBanner.hidden = true;
+      el.waitingForPlayersBanner.hidden = true;
       el.nextHandBtn.hidden = !state.payouts;
     }
     disableAllActions();
@@ -279,6 +363,7 @@ function renderState(state) {
   el.showdown.hidden = true;
   el.nextHandBtn.hidden = true;
   el.gameOverBanner.hidden = true;
+  el.waitingForPlayersBanner.hidden = true;
   updateActions(state, me);
 }
 
@@ -293,15 +378,22 @@ function renderSeats(state, me) {
     if (!p.connected) seat.classList.add("disconnected");
 
     const showBackCards = !state.waiting && p.player_id !== myPlayerId && !p.folded && p.stack !== undefined;
+    const revealedCards = state.stage === "SHOWDOWN" && p.player_id !== myPlayerId && p.hole_cards;
 
     const parts = [`<div class="seat-name">${escapeHtml(p.name)}${p.player_id === myPlayerId ? " (you)" : ""}</div>`];
+    if (p.player_id === state.host_id) parts.push('<div class="badge">Host</div>');
     if (p.stack !== undefined) parts.push(`<div class="seat-stack">${p.stack} chips</div>`);
     if (p.current_bet) parts.push(`<div class="seat-bet">Bet: ${p.current_bet}</div>`);
     if (p.folded) parts.push('<div class="badge">Folded</div>');
     if (p.all_in) parts.push('<div class="badge">All-in</div>');
     if (p.eliminated) parts.push('<div class="badge">Eliminated</div>');
     if (!p.connected) parts.push('<div class="badge">Disconnected</div>');
-    if (showBackCards) parts.push(`<div class="cards">${cardBackHtml()}${cardBackHtml()}</div>`);
+    if (revealedCards) {
+      parts.push(`<div class="cards">${p.hole_cards.map(cardHtml).join("")}</div>`);
+    } else if (showBackCards) {
+      parts.push(`<div class="cards">${cardBackHtml()}${cardBackHtml()}</div>`);
+    }
+    if (p.hand_category) parts.push(`<div class="hand-category">${escapeHtml(p.hand_category)}</div>`);
 
     seat.innerHTML = parts.join("");
     el.seats.appendChild(seat);
@@ -328,10 +420,13 @@ function updateActions(state, me) {
   const maxRaiseTo = (me.current_bet || 0) + (me.stack || 0);
   const minRaiseTo = state.current_bet + state.min_raise;
 
+  const callAmount = Math.min(toCall, me.stack || 0);
+
   el.foldBtn.disabled = false;
   el.checkBtn.disabled = toCall > 0;
   el.callBtn.disabled = toCall <= 0;
-  el.callBtn.textContent = toCall > 0 ? `Call ${toCall}` : "Call";
+  el.callBtn.textContent =
+    toCall > 0 ? `Call ${callAmount}${callAmount < toCall ? " (All-In)" : ""}` : "Call";
 
   const canRaise = maxRaiseTo >= minRaiseTo && (me.stack || 0) > 0;
   el.raiseBtn.disabled = !canRaise;
@@ -392,6 +487,7 @@ el.maxRaiseBtn.addEventListener("click", () => {
   el.raiseAmount.value = el.raiseAmount.max || el.raiseAmount.value;
 });
 el.nextHandBtn.addEventListener("click", () => sendAction("next_hand"));
+el.startMatchBtn.addEventListener("click", () => sendAction("start_match"));
 
 (function init() {
   const session = loadSession();

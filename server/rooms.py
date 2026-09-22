@@ -5,6 +5,7 @@ import secrets
 import string
 import threading
 from dataclasses import dataclass, field
+from enum import Enum, auto
 from typing import Collection, Optional
 
 from poker.game import Game
@@ -41,6 +42,11 @@ class InvalidNameError(RoomError):
     pass
 
 
+class RoomStatus(Enum):
+    WAITING = auto()
+    IN_PROGRESS = auto()
+
+
 @dataclass
 class RoomPlayer:
     player_id: str
@@ -51,11 +57,15 @@ class RoomPlayer:
 class Room:
     code: str
     players: list[RoomPlayer] = field(default_factory=list)
+    status: RoomStatus = RoomStatus.WAITING
+    host_id: Optional[str] = None
     game: Optional[Game] = None
     last_payouts: Optional[dict[str, int]] = None
     game_over: bool = False
     winner_id: Optional[str] = None
     eliminated_ids: set[str] = field(default_factory=set)
+    sitting_out: dict[str, int] = field(default_factory=dict)
+    waiting_for_players: bool = False
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     turn_deadline: Optional[float] = None
     turn_timer_task: Optional[asyncio.Task] = None
@@ -113,6 +123,8 @@ class RoomManager:
             # (above); new seats always get a fresh server-issued id.
             player = RoomPlayer(player_id=secrets.token_hex(8), name=name)
             room.players.append(player)
+            if room.host_id is None:
+                room.host_id = player.player_id
             return player
 
     def _generate_unique_code(self) -> str:

@@ -169,6 +169,44 @@ def test_call_that_exhausts_stack_marks_all_in():
     assert a.all_in
 
 
+def test_call_with_fewer_chips_than_owed_is_a_legal_short_all_in():
+    game = Game(["A", "B"], starting_stack=1000, small_blind=5, big_blind=10)
+    game.start_hand()  # A=button/sb (posted 5), B=bb (posted 10)
+
+    game.apply_action("A", ActionType.RAISE, amount=100)  # A owes B a call of 90
+
+    b = find(game, "B")
+    b.stack = 40  # far less than the 90 owed
+    game.apply_action("B", ActionType.CALL)  # must not raise IllegalActionError
+
+    assert b.stack == 0
+    assert b.all_in
+    assert b.total_contributed == 50  # 10 already in + 40 remaining stack
+    # only A can still act, so the board auto-runs straight to showdown
+    assert game.stage == Stage.SHOWDOWN
+
+
+def test_short_stacked_call_creates_a_side_pot():
+    game = Game(["A", "B", "C"], starting_stack=1000, small_blind=5, big_blind=10)
+    game.start_hand()  # A=button, B=sb(5), C=bb(10); A acts first
+
+    game.apply_action("A", ActionType.RAISE, amount=200)
+
+    b = find(game, "B")
+    b.stack = 45  # short of the 195 owed
+    game.apply_action("B", ActionType.CALL)
+    assert b.stack == 0
+    assert b.all_in
+    assert b.total_contributed == 50  # 5 posted + 45 remaining stack
+
+    game.apply_action("C", ActionType.CALL)  # C has plenty and calls the full 200
+
+    pots = game.compute_side_pots()
+    assert [p.amount for p in pots] == [150, 300]
+    assert set(pots[0].eligible_player_ids) == {"A", "B", "C"}
+    assert set(pots[1].eligible_player_ids) == {"A", "C"}  # B can't contest chips beyond their all-in
+
+
 # ---------------------------------------------------------------------------
 # Actions: RAISE
 
@@ -344,6 +382,45 @@ def test_fold_out_winner_takes_entire_pot_without_showdown_cards():
     assert find(game, "C").stack == 1005  # 1000 - 10 (bb) + 15 (pot)
 
 
+def test_showdown_hands_empty_when_pot_won_uncontested_by_fold():
+    game = Game(["A", "B", "C"], starting_stack=1000, small_blind=5, big_blind=10)
+    game.start_hand()
+    game.apply_action("A", ActionType.FOLD)
+    game.apply_action("B", ActionType.FOLD)
+    assert game.stage == Stage.SHOWDOWN
+
+    assert game.showdown_hands() == {}
+
+
+def test_showdown_hands_empty_before_showdown():
+    game = Game(["A", "B"], starting_stack=1000, small_blind=5, big_blind=10)
+    game.start_hand()
+    assert game.showdown_hands() == {}
+
+
+def test_showdown_hands_reports_category_for_each_active_player():
+    game = Game(["A", "B"], starting_stack=1000, small_blind=5, big_blind=10)
+    game.start_hand()
+    game.apply_action("A", ActionType.CALL)
+    game.apply_action("B", ActionType.CHECK)
+    game.apply_action("B", ActionType.CHECK)
+    game.apply_action("A", ActionType.CHECK)
+    game.apply_action("B", ActionType.CHECK)
+    game.apply_action("A", ActionType.CHECK)
+    game.apply_action("B", ActionType.CHECK)
+    game.apply_action("A", ActionType.CHECK)
+    assert game.stage == Stage.SHOWDOWN
+
+    game.community_cards = BOARD  # TWOc, FIVEd, NINEh, JACKc, KINGd
+    find(game, "A").hole_cards = [Card(Rank.KING, Suit.HEARTS), Card(Rank.SIX, Suit.HEARTS)]
+    find(game, "B").hole_cards = [Card(Rank.JACK, Suit.HEARTS), Card(Rank.THREE, Suit.SPADES)]
+
+    assert game.showdown_hands() == {
+        "A": "Pair of Kings",
+        "B": "Pair of Jacks",
+    }
+
+
 def test_settle_showdown_before_showdown_stage_is_illegal():
     game = Game(["A", "B"], starting_stack=1000, small_blind=5, big_blind=10)
     game.start_hand()
@@ -504,6 +581,38 @@ def test_start_next_hand_ends_when_fewer_than_two_have_chips():
 
     with pytest.raises(IllegalActionError):
         game.start_next_hand()
+
+
+# ---------------------------------------------------------------------------
+# remove_players
+
+def test_remove_players_drops_seat_and_keeps_stack_off_the_table():
+    game = Game(["A", "B", "C"], starting_stack=1000, small_blind=5, big_blind=10)
+    game.start_hand()
+    game.apply_action("A", ActionType.FOLD)
+    game.apply_action("B", ActionType.FOLD)
+    game.settle_showdown()
+
+    removed = game.remove_players({"B"})
+
+    assert removed == ["B"]
+    assert {p.player_id for p in game.players} == {"A", "C"}
+
+
+def test_remove_players_rejects_mid_hand():
+    game = Game(["A", "B"], starting_stack=1000, small_blind=5, big_blind=10)
+    game.start_hand()
+    with pytest.raises(IllegalActionError):
+        game.remove_players({"A"})
+
+
+def test_remove_players_rejects_unknown_id():
+    game = Game(["A", "B"], starting_stack=1000, small_blind=5, big_blind=10)
+    game.start_hand()
+    game.apply_action("A", ActionType.FOLD)
+    game.settle_showdown()
+    with pytest.raises(IllegalActionError):
+        game.remove_players({"nope"})
 
 
 # ---------------------------------------------------------------------------

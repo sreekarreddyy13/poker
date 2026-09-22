@@ -19,6 +19,7 @@ from server.rooms import (
     Room,
     RoomManager,
     RoomNotFoundError,
+    RoomStatus,
 )
 
 ACTION_MAP: dict[str, ActionType] = {
@@ -76,7 +77,14 @@ def _card_json(card: Card) -> dict[str, str]:
     return {"rank": card.rank.name, "suit": card.suit.name}
 
 
-def _player_view(room: Room, player_id: str, viewer_id: str, connected: set[str]) -> dict:
+def _player_view(
+    room: Room,
+    player_id: str,
+    viewer_id: str,
+    connected: set[str],
+    shown: Optional[dict[str, str]] = None,
+) -> dict:
+    shown = shown or {}
     room_player = next(p for p in room.players if p.player_id == player_id)
     view: dict = {
         "player_id": player_id,
@@ -91,8 +99,10 @@ def _player_view(room: Room, player_id: str, viewer_id: str, connected: set[str]
             view["current_bet"] = game_player.current_bet
             view["folded"] = game_player.folded
             view["all_in"] = game_player.all_in
-            if player_id == viewer_id:
+            if player_id == viewer_id or player_id in shown:
                 view["hole_cards"] = [_card_json(c) for c in game_player.hole_cards]
+            if player_id in shown:
+                view["hand_category"] = shown[player_id]
         elif player_id in room.eliminated_ids:
             view["eliminated"] = True
     return view
@@ -104,12 +114,17 @@ def build_state(room: Room, viewer_id: str, connected: set[str]) -> dict:
         return {
             "type": "state",
             "code": room.code,
+            "room_status": room.status.name,
+            "host_id": room.host_id,
             "waiting": True,
             "players": [_player_view(room, p.player_id, viewer_id, connected) for p in room.players],
         }
+    shown = game.showdown_hands() if game.stage == Stage.SHOWDOWN else {}
     state = {
         "type": "state",
         "code": room.code,
+        "room_status": room.status.name,
+        "host_id": room.host_id,
         "waiting": False,
         "stage": game.stage.name,
         "community_cards": [_card_json(c) for c in game.community_cards],
@@ -117,12 +132,13 @@ def build_state(room: Room, viewer_id: str, connected: set[str]) -> dict:
         "current_bet": game.current_bet,
         "min_raise": game.min_raise,
         "current_actor": game.current_actor,
-        "players": [_player_view(room, p.player_id, viewer_id, connected) for p in room.players],
+        "players": [_player_view(room, p.player_id, viewer_id, connected, shown) for p in room.players],
     }
     if room.turn_deadline is not None:
-        state["turn_expires_in"] = max(0.0, room.turn_deadline - time.time())
+        state["turn_deadline"] = room.turn_deadline
     if game.stage == Stage.SHOWDOWN and room.last_payouts is not None:
         state["payouts"] = room.last_payouts
+        state["waiting_for_players"] = room.waiting_for_players
     state["game_over"] = room.game_over
     if room.game_over:
         winner = next((p for p in room.players if p.player_id == room.winner_id), None)
@@ -131,6 +147,8 @@ def build_state(room: Room, viewer_id: str, connected: set[str]) -> dict:
 
 
 def _maybe_start_hand(room: Room) -> None:
+    if room.status != RoomStatus.IN_PROGRESS:
+        return
     if room.game is not None:
         return
     eligible_ids = [p.player_id for p in room.players if p.player_id in connection_manager.connected_ids(room.code)]
@@ -205,6 +223,18 @@ async def _run_turn_timer(room: Room, actor_id: str, timeout: float) -> None:
     await _broadcast_state(room)
 
 
+def _apply_start_match(room: Room, player_id: str) -> Optional[str]:
+    if room.status != RoomStatus.WAITING:
+        return "the match has already started"
+    if player_id != room.host_id:
+        return "only the host can start the match"
+    if len(room.players) < 2:
+        return "need at least 2 players to start"
+    room.status = RoomStatus.IN_PROGRESS
+    _maybe_start_hand(room)
+    return None
+
+
 def _apply_next_hand(room: Room, player_id: str) -> Optional[str]:
     game = room.game
     if game is None or game.stage != Stage.SHOWDOWN:
@@ -216,18 +246,48 @@ def _apply_next_hand(room: Room, player_id: str) -> Optional[str]:
     if not any(p.player_id == player_id for p in game.players):
         return "you are not part of this game"
 
-    seated_ids = {p.player_id for p in game.players}
     connected = connection_manager.connected_ids(room.code)
-    pending = [p for p in room.players if p.player_id not in seated_ids and p.player_id in connected]
+    seated_ids = {p.player_id for p in game.players}
+    pending = [
+        p
+        for p in room.players
+        if p.player_id not in seated_ids
+        and p.player_id not in room.eliminated_ids
+        and p.player_id in connected
+    ]
 
-    survivors = [p.player_id for p in game.players if p.stack > 0]
-    if len(survivors) < 2 and not pending:
+    # Every player who could still plausibly take another hand: seated with
+    # chips, previously sat out (disconnected) but still holding chips, or
+    # about to be seated. Used to decide the game has a real winner.
+    total_with_chips = (
+        {p.player_id for p in game.players if p.stack > 0}
+        | {pid for pid, stack in room.sitting_out.items() if stack > 0}
+        | {p.player_id for p in pending}
+    )
+    if len(total_with_chips) < 2:
         room.game_over = True
-        room.winner_id = survivors[0] if survivors else None
+        room.winner_id = next(iter(total_with_chips), None)
         return None
 
+    # Of those, only the ones actually reachable right now (connected, or
+    # about to be added) can play the next hand.
+    connected_with_chips = {p.player_id for p in game.players if p.stack > 0 and p.player_id in connected}
+    connected_with_chips |= {p.player_id for p in pending}
+    if len(connected_with_chips) < 2:
+        room.waiting_for_players = True
+        return None
+    room.waiting_for_players = False
+
+    sit_out_ids = {p.player_id for p in game.players if p.stack > 0 and p.player_id not in connected}
+    if sit_out_ids:
+        for p in game.players:
+            if p.player_id in sit_out_ids:
+                room.sitting_out[p.player_id] = p.stack
+        game.remove_players(sit_out_ids)
+
     for p in pending:
-        game.add_player(p.player_id, STARTING_STACK)
+        stack = room.sitting_out.pop(p.player_id, STARTING_STACK)
+        game.add_player(p.player_id, stack)
 
     removed = game.start_next_hand()
     room.eliminated_ids.update(removed)
@@ -242,6 +302,9 @@ def _apply_message(room: Room, player_id: str, raw: dict) -> Optional[str]:
         request = ActionRequest.model_validate(raw)
     except ValidationError as exc:
         return str(exc)
+
+    if request.action.lower() == "start_match":
+        return _apply_start_match(room, player_id)
 
     if request.action.lower() == "next_hand":
         return _apply_next_hand(room, player_id)
@@ -288,7 +351,11 @@ async def handle_connection(websocket: WebSocket, code: str, room_manager: RoomM
         async with room.lock:
             was_new_hand = room.game is None
             _maybe_start_hand(room)
-            if room.game is not None and (was_new_hand or room.game.current_actor == player_id):
+            # Only arm the clock here if this connection just started a brand
+            # new hand. A reconnect mid-turn (even by the current actor) must
+            # not touch the existing deadline -- it just re-attaches and gets
+            # sent whatever state (and deadline) is already in effect.
+            if room.game is not None and was_new_hand:
                 _arm_turn_timer(room)
         await _broadcast_state(room)
 
@@ -318,8 +385,18 @@ async def handle_connection(websocket: WebSocket, code: str, room_manager: RoomM
     finally:
         connection_manager.disconnect(code, player_id, websocket)
         async with room.lock:
-            if not connection_manager.connected_ids(room.code):
+            connected_ids = connection_manager.connected_ids(room.code)
+            if not connected_ids:
                 _cancel_turn_timer(room)
-            elif room.game is not None and room.game.current_actor == player_id:
+            elif (
+                player_id not in connected_ids
+                and room.game is not None
+                and room.game.current_actor == player_id
+            ):
+                # Only a genuine disconnect (no live connection left under
+                # this player_id) shortens the clock to the grace period. If
+                # this socket was just replaced by a newer one for the same
+                # player (a rejoin), player_id is still connected here and
+                # the existing deadline must be left alone.
                 _arm_turn_timer(room)
         await _broadcast_state(room)

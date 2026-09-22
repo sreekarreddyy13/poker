@@ -1,7 +1,7 @@
 import pytest
 
 from poker.cards import Card, Rank, Suit
-from poker.evaluator import HandCategory, evaluate_hand
+from poker.evaluator import HandCategory, describe_hand, evaluate_hand
 
 
 def C(rank: Rank, suit: Suit) -> Card:
@@ -324,3 +324,121 @@ def test_rejects_too_few_cards():
 def test_rejects_too_many_cards():
     with pytest.raises(ValueError):
         evaluate_hand([C(r, Suit.CLUBS) for r in list(Rank)[:8]])
+
+
+# --- describe_hand ----------------------------------------------------------
+
+def test_describe_high_card():
+    hand = [
+        C(Rank.TWO, Suit.CLUBS), C(Rank.FIVE, Suit.DIAMONDS), C(Rank.SEVEN, Suit.HEARTS),
+        C(Rank.NINE, Suit.SPADES), C(Rank.ACE, Suit.CLUBS),
+    ]
+    assert describe_hand(evaluate_hand(hand)) == "High Card, Ace"
+
+
+def test_describe_pair():
+    hand = [
+        C(Rank.JACK, Suit.CLUBS), C(Rank.JACK, Suit.DIAMONDS), C(Rank.SEVEN, Suit.HEARTS),
+        C(Rank.NINE, Suit.SPADES), C(Rank.KING, Suit.CLUBS),
+    ]
+    assert describe_hand(evaluate_hand(hand)) == "Pair of Jacks"
+
+
+def test_describe_pair_of_sixes_pluralizes_correctly():
+    hand = [
+        C(Rank.SIX, Suit.CLUBS), C(Rank.SIX, Suit.DIAMONDS), C(Rank.SEVEN, Suit.HEARTS),
+        C(Rank.NINE, Suit.SPADES), C(Rank.KING, Suit.CLUBS),
+    ]
+    assert describe_hand(evaluate_hand(hand)) == "Pair of Sixes"
+
+
+def test_describe_two_pair():
+    hand = [
+        C(Rank.KING, Suit.CLUBS), C(Rank.KING, Suit.DIAMONDS), C(Rank.FOUR, Suit.HEARTS),
+        C(Rank.FOUR, Suit.SPADES), C(Rank.NINE, Suit.CLUBS),
+    ]
+    assert describe_hand(evaluate_hand(hand)) == "Two Pair, Kings and Fours"
+
+
+def test_describe_three_of_a_kind():
+    hand = [
+        C(Rank.EIGHT, Suit.CLUBS), C(Rank.EIGHT, Suit.DIAMONDS), C(Rank.EIGHT, Suit.HEARTS),
+        C(Rank.NINE, Suit.SPADES), C(Rank.KING, Suit.CLUBS),
+    ]
+    assert describe_hand(evaluate_hand(hand)) == "Three of a Kind, Eights"
+
+
+def test_describe_straight():
+    hand = [
+        C(Rank.FIVE, Suit.CLUBS), C(Rank.SIX, Suit.DIAMONDS), C(Rank.SEVEN, Suit.HEARTS),
+        C(Rank.EIGHT, Suit.SPADES), C(Rank.NINE, Suit.CLUBS),
+    ]
+    assert describe_hand(evaluate_hand(hand)) == "Straight, Nine-High"
+
+
+def test_describe_wheel_straight():
+    hand = [
+        C(Rank.ACE, Suit.CLUBS), C(Rank.TWO, Suit.DIAMONDS), C(Rank.THREE, Suit.HEARTS),
+        C(Rank.FOUR, Suit.SPADES), C(Rank.FIVE, Suit.CLUBS),
+    ]
+    assert describe_hand(evaluate_hand(hand)) == "Straight, Five-High"
+
+
+def test_describe_flush():
+    hand = [
+        C(Rank.TWO, Suit.CLUBS), C(Rank.FIVE, Suit.CLUBS), C(Rank.SEVEN, Suit.CLUBS),
+        C(Rank.NINE, Suit.CLUBS), C(Rank.KING, Suit.CLUBS),
+    ]
+    assert describe_hand(evaluate_hand(hand)) == "Flush, King-High"
+
+
+def test_describe_full_house():
+    hand = [
+        C(Rank.KING, Suit.CLUBS), C(Rank.KING, Suit.DIAMONDS), C(Rank.KING, Suit.HEARTS),
+        C(Rank.FOUR, Suit.SPADES), C(Rank.FOUR, Suit.CLUBS),
+    ]
+    assert describe_hand(evaluate_hand(hand)) == "Full House, Kings full of Fours"
+
+
+def test_describe_four_of_a_kind():
+    hand = [
+        C(Rank.SEVEN, Suit.CLUBS), C(Rank.SEVEN, Suit.DIAMONDS), C(Rank.SEVEN, Suit.HEARTS),
+        C(Rank.SEVEN, Suit.SPADES), C(Rank.NINE, Suit.CLUBS),
+    ]
+    assert describe_hand(evaluate_hand(hand)) == "Four of a Kind, Sevens"
+
+
+def test_describe_straight_flush():
+    hand = [
+        C(Rank.FIVE, Suit.CLUBS), C(Rank.SIX, Suit.CLUBS), C(Rank.SEVEN, Suit.CLUBS),
+        C(Rank.EIGHT, Suit.CLUBS), C(Rank.NINE, Suit.CLUBS),
+    ]
+    assert describe_hand(evaluate_hand(hand)) == "Straight Flush, Nine-High"
+
+
+def test_describe_wheel_straight_flush():
+    hand = [
+        C(Rank.ACE, Suit.CLUBS), C(Rank.TWO, Suit.CLUBS), C(Rank.THREE, Suit.CLUBS),
+        C(Rank.FOUR, Suit.CLUBS), C(Rank.FIVE, Suit.CLUBS),
+    ]
+    assert describe_hand(evaluate_hand(hand)) == "Straight Flush, Five-High"
+
+
+def test_describe_royal_flush():
+    hand = [
+        C(Rank.TEN, Suit.SPADES), C(Rank.JACK, Suit.SPADES), C(Rank.QUEEN, Suit.SPADES),
+        C(Rank.KING, Suit.SPADES), C(Rank.ACE, Suit.SPADES),
+    ]
+    assert describe_hand(evaluate_hand(hand)) == "Royal Flush"
+
+
+def test_describe_tied_hands_get_identical_description():
+    hand_a = [
+        C(Rank.TEN, Suit.CLUBS), C(Rank.TEN, Suit.DIAMONDS), C(Rank.KING, Suit.HEARTS),
+        C(Rank.FOUR, Suit.SPADES), C(Rank.TWO, Suit.CLUBS),
+    ]
+    hand_b = [
+        C(Rank.TEN, Suit.HEARTS), C(Rank.TEN, Suit.SPADES), C(Rank.KING, Suit.CLUBS),
+        C(Rank.FOUR, Suit.DIAMONDS), C(Rank.TWO, Suit.HEARTS),
+    ]
+    assert describe_hand(evaluate_hand(hand_a)) == describe_hand(evaluate_hand(hand_b))

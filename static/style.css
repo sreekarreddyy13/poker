@@ -250,6 +250,12 @@ button:hover:not(:disabled) {
   color: var(--muted);
 }
 
+.hand-category {
+  font-size: 0.75rem;
+  color: var(--accent);
+  margin-top: 0.25rem;
+}
+
 .badge {
   display: inline-block;
   margin-top: 0.25rem;
@@ -266,9 +272,17 @@ button:hover:not(:disabled) {
   margin-top: 0.4rem;
 }
 
-.seat .card.back {
+.seat .card {
   width: 24px;
   height: 34px;
+}
+
+.seat .card .rank {
+  font-size: 0.7rem;
+}
+
+.seat .card .suit {
+  font-size: 0.75rem;
 }
 
 .showdown {
